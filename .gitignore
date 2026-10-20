@@ -1,0 +1,13 @@
+# Local and generated files
+.DS_Store
+node_modules/
+.idea/
+.gradle/
+build/
+out/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+!.env.*.example

@@ -1,0 +1,43 @@
+apply plugin: 'java-library'
+apply plugin: 'maven'
+
+group = 'org.algorithm-visualizer'
+version = '2.3.10'
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.8.5'
+}
+
+task sourcesJar(type: Jar) {
+    classifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+task javadocJar(type: Jar) {
+    classifier = 'javadoc'
+    from javadoc
+}
+
+task clearPj(type:Delete){
+    delete 'build','target'
+}
+
+task copyJar(type:Copy){
+    from configurations.runtime
+    into ('build/libs/lib')
+
+}
+task release(type: Copy,dependsOn: [build,copyJar]) {
+//    from  'conf'
+//    into ('build/libs/eachend/conf') // 目标位置
+}
+
+artifacts {
+    archives sourcesJar
+    archives javadocJar
+}
