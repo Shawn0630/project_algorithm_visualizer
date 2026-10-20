@@ -29,7 +29,10 @@ export class Hierarchy {
 
     const files: File[] = [];
     this.categories.forEach(category => category.algorithms.forEach(algorithm => files.push(...algorithm.files)));
-    this.cacheCommitAuthors().then(commitAuthors => this.cacheContributors(files, commitAuthors));
+    // Background contributor caching must never take the server down: its
+    // GitHub API call fails with placeholder credentials, and an unhandled
+    // rejection is fatal on Node >= 15 (it was only a warning in 2019).
+    this.cacheCommitAuthors().then(commitAuthors => this.cacheContributors(files, commitAuthors)).catch(console.error);
   }
 
   async update(commit?: string) {
