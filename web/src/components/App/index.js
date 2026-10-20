@@ -27,8 +27,8 @@ class App extends BaseComponent {
     super(props);
 
     this.state = {
-      workspaceVisibles: [false, true, true, true],
-      workspaceWeights: [1.4, 1, 2, 2],
+      workspaceVisibles: [true, true, true, false],
+      workspaceWeights: [1, 2, 2, 1.4],
     };
 
     this.codeEditorRef = React.createRef();
@@ -222,15 +222,15 @@ class App extends BaseComponent {
     this.codeEditorRef.current.handleResize();
   }
 
-  toggleNavigatorOpened(navigatorOpened = !this.state.workspaceVisibles[1]) {
+  toggleNavigatorOpened(navigatorOpened = !this.state.workspaceVisibles[0]) {
     const workspaceVisibles = [...this.state.workspaceVisibles];
-    workspaceVisibles[1] = navigatorOpened;
+    workspaceVisibles[0] = navigatorOpened;
     this.setState({ workspaceVisibles });
   }
 
-  toggleAiPanelOpened(aiPanelOpened = !this.state.workspaceVisibles[0]) {
+  toggleAiPanelOpened(aiPanelOpened = !this.state.workspaceVisibles[3]) {
     const workspaceVisibles = [...this.state.workspaceVisibles];
-    workspaceVisibles[0] = aiPanelOpened;
+    workspaceVisibles[3] = aiPanelOpened;
     this.setState({ workspaceVisibles });
   }
 
@@ -243,8 +243,8 @@ class App extends BaseComponent {
     const { titles, description, saved } = this.props.current;
 
     const title = `${saved ? '' : '(Unsaved) '}${titles.join(' - ')}`;
-    const navigatorOpened = workspaceVisibles[1];
-    const aiPanelOpened = workspaceVisibles[0];
+    const navigatorOpened = workspaceVisibles[0];
+    const aiPanelOpened = workspaceVisibles[3];
 
     return (
       <div className={styles.app}>
@@ -258,12 +258,12 @@ class App extends BaseComponent {
                 ignoreHistoryBlock={this.ignoreHistoryBlock}/>
         <ResizableContainer className={styles.workspace} horizontal weights={workspaceWeights}
                             visibles={workspaceVisibles} onChangeWeights={this.handleChangeWorkspaceWeights}>
-          <AiAssistant/>
           <Navigator/>
           <VisualizationViewer className={styles.visualization_viewer}/>
           <TabContainer className={styles.editor_tab_container}>
             <CodeEditor ref={this.codeEditorRef}/>
           </TabContainer>
+          <AiAssistant/>
         </ResizableContainer>
         <ToastContainer className={styles.toast_container}/>
       </div>
