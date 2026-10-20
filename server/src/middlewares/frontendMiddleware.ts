@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import url from 'url';
 import Server from 'Server';
 import { frontendBuiltDir } from 'config/paths';
+import { errorSummary } from 'utils/misc';
 
 const packageJson = require('../../package.json');
 
@@ -11,7 +12,7 @@ export function frontendMiddleware(server: Server) {
   const staticMiddleware = express.static(frontendBuiltDir, {index: false});
 
   if (!fs.pathExistsSync(frontendBuiltDir)) {
-    server.updateFrontend().catch(console.error);
+    server.updateFrontend().catch(error => console.error('Frontend update failed:', errorSummary(error)));
   }
 
   return (req: Request, res: Response, next: NextFunction) => {
@@ -28,7 +29,7 @@ export function frontendMiddleware(server: Server) {
         const [, categoryKey, algorithmKey] = pathname.split('/');
         let {title, description} = packageJson;
         let algorithm = undefined;
-        if (categoryKey && categoryKey !== 'scratch-paper') {
+        if (categoryKey && categoryKey !== 'scratch-paper' && categoryKey !== 'license') {
           algorithm = server.hierarchy.find(categoryKey, algorithmKey) || null;
           if (algorithm) {
             title = [algorithm.categoryName, algorithm.algorithmName].join(' - ');

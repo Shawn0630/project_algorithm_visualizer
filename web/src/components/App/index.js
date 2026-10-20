@@ -18,7 +18,7 @@ import { AlgorithmApi, GitHubApi, VisualizationApi } from 'apis';
 import { actions } from 'reducers';
 import { createUserFile, extension, refineGist } from 'common/util';
 import { exts, languages } from 'common/config';
-import { SCRATCH_PAPER_README_MD } from 'files';
+import { LICENSE_MD, SCRATCH_PAPER_README_MD } from 'files';
 import styles from './App.module.scss';
 
 class App extends BaseComponent {
@@ -147,7 +147,19 @@ class App extends BaseComponent {
   loadAlgorithm({ categoryKey, algorithmKey, gistId }, { visualizationId }) {
     const { ext } = this.props.env;
     const fetch = () => {
-      if (window.__PRELOADED_ALGORITHM__) {
+      if (this.props.location.pathname === '/license') {
+        // The License page: the file shows in the editor like any page,
+        // and the markdown is also rendered in the center viewer through
+        // a one-chunk MarkdownTracer visualization.
+        this.props.setLicense();
+        const key = 'license';
+        this.props.setChunks([[
+          { key, method: 'MarkdownTracer', args: ['License'] },
+          { key, method: 'set', args: [LICENSE_MD.content] },
+          { key: null, method: 'setRoot', args: [key] },
+        ]]);
+        this.props.setCursor(1);
+      } else if (window.__PRELOADED_ALGORITHM__) {
         this.props.setAlgorithm(window.__PRELOADED_ALGORITHM__);
         delete window.__PRELOADED_ALGORITHM__;
       } else if (window.__PRELOADED_ALGORITHM__ === null) {

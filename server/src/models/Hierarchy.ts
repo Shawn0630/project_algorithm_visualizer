@@ -4,11 +4,17 @@ import { GitHubApi } from 'utils/apis';
 import { Algorithm, Category, File, Type } from 'models';
 import { Author } from 'models/File';
 import { algorithmsDir, leetcodeDir } from 'config/paths';
-import { execute, pull } from 'utils/misc';
+import { execute, pull, errorSummary } from 'utils/misc';
 
 type CommitAuthors = {
   [sha: string]: Author,
 }
+
+// Background maintenance (content pulls, contributor caching) is
+// best-effort: failures are expected when the LAN git server is down or
+// GitHub credentials are placeholders, so they are logged as a single
+// line (via errorSummary) instead of a full stack trace that looks
+// like a crash.
 
 export class Hierarchy {
   private categories!: Category[];
@@ -17,7 +23,7 @@ export class Hierarchy {
 
   constructor() {
     this.refresh();
-    this.update().catch(console.error);
+    this.update().catch(error => console.error('Content update failed:', errorSummary(error)));
   }
 
   refresh() {
@@ -32,7 +38,8 @@ export class Hierarchy {
     // Background contributor caching must never take the server down: its
     // GitHub API call fails with placeholder credentials, and an unhandled
     // rejection is fatal on Node >= 15 (it was only a warning in 2019).
-    this.cacheCommitAuthors().then(commitAuthors => this.cacheContributors(files, commitAuthors)).catch(console.error);
+    this.cacheCommitAuthors().then(commitAuthors => this.cacheContributors(files, commitAuthors))
+      .catch(error => console.error('Contributor caching failed:', errorSummary(error)));
   }
 
   async update(commit?: string) {
@@ -47,7 +54,7 @@ export class Hierarchy {
       try {
         await pull(dir, repo, commit);
       } catch (error) {
-        console.error(`Failed to update ${repo}:`, error);
+        console.error(`Failed to update ${repo}:`, errorSummary(error));
       }
     }
     this.refresh();
@@ -71,19 +78,26 @@ export class Hierarchy {
 
   async cacheContributors(files: File[], commitAuthors: CommitAuthors) {
     for (const file of files) {
-      const stdout = await execute(`git --no-pager log --follow --no-merges --format="%H" -- "${path.relative(this.algorithmPath, file.path)}"`, {
-        cwd: this.algorithmPath,
-      });
-      const output = stdout.toString().replace(/\n$/, '');
-      const shas = output.split('\n').reverse();
-      const contributors: Author[] = [];
-      for (const sha of shas) {
-        const author = commitAuthors[sha];
-        if (author && !contributors.find(contributor => contributor.login === author.login)) {
-          contributors.push(author);
+      // A single file's git log can fail (e.g. a corrupt checkout whose
+      // index references paths outside the repo); that file just keeps
+      // no contributor list instead of failing the whole pass.
+      try {
+        const stdout = await execute(`git --no-pager log --follow --no-merges --format="%H" -- "${path.relative(this.algorithmPath, file.path)}"`, {
+          cwd: this.algorithmPath,
+        });
+        const output = stdout.toString().replace(/\n$/, '');
+        const shas = output.split('\n').reverse();
+        const contributors: Author[] = [];
+        for (const sha of shas) {
+          const author = commitAuthors[sha];
+          if (author && !contributors.find(contributor => contributor.login === author.login)) {
+            contributors.push(author);
+          }
         }
+        file.contributors = contributors;
+      } catch (error) {
+        continue;
       }
-      file.contributors = contributors;
     }
   }
 

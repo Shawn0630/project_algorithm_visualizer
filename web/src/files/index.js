@@ -10,5 +10,5 @@ export const CODE_JAVA = readUserFile('skeletons/code.java');
 export const CODE_JS = readUserFile('skeletons/code.js');
 export const CODE_PY = readUserFile('skeletons/code.py');
 export const FEATURES_MD = readProjectFile('algorithm-visualizer/FEATURES.md');
-export const LICENSE_FILE = readProjectFile('algorithm-visualizer/LICENSE');
+export const LICENSE_MD = readProjectFile('algorithm-visualizer/LICENSE.md');
 export const SCRATCH_PAPER_README_MD = readProjectFile('scratch-paper/README.md');

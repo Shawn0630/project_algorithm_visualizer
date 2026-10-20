@@ -1,5 +1,5 @@
 import { combineActions, createAction, handleActions } from 'redux-actions';
-import { FEATURES_MD, LICENSE_FILE } from 'files';
+import { FEATURES_MD, LICENSE_MD } from 'files';
 import { extension, isSaved } from 'common/util';
 
 const prefix = 'CURRENT';
@@ -17,6 +17,13 @@ const setScratchPaper = createAction(`${prefix}/SET_SCRATCH_PAPER`, ({ login, gi
   files,
   description: homeDescription,
 }));
+const setLicense = createAction(`${prefix}/SET_LICENSE`, () => ({
+  algorithm: { categoryKey: 'algorithm-visualizer', algorithmKey: 'license' },
+  scratchPaper: undefined,
+  titles: ['License'],
+  files: [LICENSE_MD],
+  description: homeDescription,
+}));
 const setEditingFile = createAction(`${prefix}/SET_EDITING_FILE`, file => ({ file }));
 const modifyTitle = createAction(`${prefix}/MODIFY_TITLE`, title => ({ title }));
 const addFile = createAction(`${prefix}/ADD_FILE`, file => ({ file }));
@@ -28,6 +35,7 @@ export const actions = {
   setHome,
   setAlgorithm,
   setScratchPaper,
+  setLicense,
   setEditingFile,
   modifyTitle,
   addFile,
@@ -37,7 +45,7 @@ export const actions = {
 };
 
 const homeTitles = ['Algorithm Visualizer'];
-const homeFiles = [FEATURES_MD, LICENSE_FILE];
+const homeFiles = [FEATURES_MD, LICENSE_MD];
 const homeDescription = 'Algorithm Visualizer is an interactive online platform that visualizes algorithms from code.';
 const defaultState = {
   algorithm: {
@@ -60,6 +68,7 @@ export default handleActions({
     setHome,
     setAlgorithm,
     setScratchPaper,
+    setLicense,
   )]: (state, { payload }) => {
     const { algorithm, scratchPaper, titles, files, description } = payload;
     return {

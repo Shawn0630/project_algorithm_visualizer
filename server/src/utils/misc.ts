@@ -61,3 +61,11 @@ export function execute(command: string, {stdout, stderr, ...options}: ExecuteOp
     if (child.stderr && stderr) child.stderr.pipe(stderr);
   });
 }
+
+// One-line summary of an error for background-task logging: prefer the
+// line that carries the actual failure (git's "fatal: ...") over any
+// progress output that precedes it.
+export function errorSummary(error: any): string {
+  const lines = String((error && error.message) || error).split('\n').map(line => line.trim()).filter(Boolean);
+  return lines.find(line => line.startsWith('fatal')) || lines[0] || 'unknown error';
+}

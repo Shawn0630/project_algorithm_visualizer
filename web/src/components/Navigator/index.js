@@ -89,6 +89,8 @@ class Navigator extends React.Component {
 
     return (
       <nav className={classes(styles.navigator, className)}>
+        <ListItem className={styles.license_item} icon={faBook} label="License" to="/license"
+                  selected={algorithmKey === 'license'}/>
         <NavTabContainer className={styles.editor_tab_container} onSelect={(type) => this.selectType(type)} selected={this.state.type}>
           <div className={styles.search_bar_container}>
             <FontAwesomeIcon fixedWidth icon={faSearch} className={styles.search_icon}/>
