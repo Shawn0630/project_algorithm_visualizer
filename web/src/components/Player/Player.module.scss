@@ -12,7 +12,7 @@
     white-space: nowrap;
 
     &:hover {
-      background-color: $color-shadow;
+      background-color: $color-overlay;
     }
 
     .range {
@@ -30,6 +30,7 @@
         height: 6px;
         margin-top: -3px;
         background-color: $theme-light;
+        border-radius: 3px;
         cursor: pointer;
         display: block;
         position: relative;
@@ -42,7 +43,8 @@
         margin-left: -3px;
         margin-top: -3px;
         appearance: none;
-        background-color: $color-font;
+        background-color: $color-selected;
+        border-radius: 3px;
         cursor: pointer;
         display: block;
         position: absolute;

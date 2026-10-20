@@ -11,7 +11,7 @@
     padding: 0 8px;
     display: flex;
     align-items: stretch;
-    border-bottom: 1px solid $theme-light;
+    border-bottom: 1px solid $color-border;
 
     &:focus-within {
       background-color: $color-overlay;
@@ -35,7 +35,7 @@
 
   .footer {
     max-height: 30vh;
-    border-top: 1px solid $theme-light;
+    border-top: 1px solid $color-border;
     overflow-y: auto;
   }
 }

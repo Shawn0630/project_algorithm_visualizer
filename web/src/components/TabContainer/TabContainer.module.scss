@@ -23,7 +23,13 @@
       cursor: pointer;
       padding: 0 12px;
       margin: 0;
-      border-bottom: 1px solid $theme-light;
+      border-bottom: 1px solid $color-border;
+      border-radius: $border-radius $border-radius 0 0;
+      transition: background-color .15s ease;
+
+      &:hover {
+        background-color: $color-overlay;
+      }
 
       .input_title {
         input {
@@ -37,11 +43,17 @@
       }
 
       &.selected {
-        border-left: 1px solid $theme-light;
-        border-right: 1px solid $theme-light;
+        border-left: 1px solid $color-border;
+        border-right: 1px solid $color-border;
         margin: 0 -1px;
         border-bottom: none;
         background-color: $theme-dark;
+        box-shadow: inset 0 2px 0 $color-selected;
+        font-weight: 600;
+
+        &:hover {
+          background-color: $theme-dark;
+        }
       }
 
       &.fake {

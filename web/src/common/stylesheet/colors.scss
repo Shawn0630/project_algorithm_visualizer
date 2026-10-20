@@ -1,13 +1,16 @@
-$theme-dark: #242424;
-$theme-normal: #393939;
-$theme-light: #505050;
-$color-font: #bbbbbb;
-$color-shadow: rgba(#000000, .2);
-$color-overlay: rgba(#ffffff, .1);
+// Modern dark palette: blue-tinted near-black surfaces, hairline borders
+// instead of big gray blocks, a brighter blue accent, softer text.
+$theme-dark: #0a0e14;
+$theme-normal: #10151d;
+$theme-light: #1c2534;
+$color-font: #c9d4e2;
+$color-border: #232e40;
+$color-shadow: rgba(#000000, .45);
+$color-overlay: rgba(#ffffff, .08);
 $color-alert: #f3bd58;
-$color-selected: #2962ff;
-$color-patched: #c51162;
-$color-highlight: #29d;
+$color-selected: #4c8dff;
+$color-patched: #ec407a;
+$color-highlight: #29b6f6;
 $color-active: #00e676;
 
 :export {

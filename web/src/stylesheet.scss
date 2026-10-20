@@ -12,10 +12,11 @@ body,
 
 body {
   font-family: $font-family-normal;
-  -webkit-font-smoothing: subpixel-antialiased;
+  -webkit-font-smoothing: antialiased;
   user-select: none;
   color: $color-font;
   font-size: $font-size-normal;
+  line-height: 1.5;
 }
 
 a {
@@ -41,4 +42,15 @@ button {
   margin: 0;
   padding: 0;
   line-height: 1.15;
+}
+
+// Flatten the Ace editor onto the app surface: its theme background is a
+// flat gray that clashes with the palette.
+.ace_editor.ace-tomorrow-night-eighties {
+  background-color: $theme-dark;
+
+  .ace_gutter {
+    background-color: $theme-dark;
+    color: rgba($color-font, .4);
+  }
 }
