@@ -1,4 +1,4 @@
-import { CODE_CPP, CODE_JAVA, CODE_JS } from 'files';
+import { CODE_CPP, CODE_JAVA, CODE_JS, CODE_PY } from 'files';
 
 const languages = [{
   name: 'JavaScript',
@@ -15,6 +15,11 @@ const languages = [{
   ext: 'java',
   mode: 'java',
   skeleton: CODE_JAVA,
+}, {
+  name: 'Python',
+  ext: 'py',
+  mode: 'python',
+  skeleton: CODE_PY,
 }];
 
 const exts = languages.map(language => language.ext);

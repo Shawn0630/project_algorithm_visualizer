@@ -6,6 +6,7 @@ import 'brace/mode/json';
 import 'brace/mode/javascript';
 import 'brace/mode/c_cpp';
 import 'brace/mode/java';
+import 'brace/mode/python';
 import 'brace/theme/tomorrow_night_eighties';
 import 'brace/ext/searchbox';
 import { actions } from 'reducers';

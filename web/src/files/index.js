@@ -8,5 +8,6 @@ const readUserFile = filePath => createUserFile(getName(filePath), getContent(fi
 export const CODE_CPP = readUserFile('skeletons/code.cpp');
 export const CODE_JAVA = readUserFile('skeletons/code.java');
 export const CODE_JS = readUserFile('skeletons/code.js');
+export const CODE_PY = readUserFile('skeletons/code.py');
 export const README_MD = readProjectFile('algorithm-visualizer/README.md');
 export const CONTRIBUTING_MD = readProjectFile('scratch-paper/CONTRIBUTING.md');

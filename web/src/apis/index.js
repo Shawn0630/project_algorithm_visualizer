@@ -102,6 +102,7 @@ const TracerApi = {
   }),
   cpp: POST('/tracers/cpp'),
   java: POST('/tracers/java'),
+  py: POST('/tracers/py'),
 };
 
 export {
