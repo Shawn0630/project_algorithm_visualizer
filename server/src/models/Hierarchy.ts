@@ -1,10 +1,23 @@
+import fs from 'fs';
 import path from 'path';
 import { listDirectories } from 'utils/hierarchy';
 import { GitHubApi } from 'utils/apis';
 import { Algorithm, Category, File, Type } from 'models';
 import { Author } from 'models/File';
-import { algorithmsDir, leetcodeDir } from 'config/paths';
+import { algorithmsDir, leetcodeDir, rootDir } from 'config/paths';
 import { execute, pull, errorSummary } from 'utils/misc';
+
+// Recursive copy used when seeding content (Node 12 has no fs.cpSync).
+function copyDirRecursive(from: string, to: string): void {
+  fs.mkdirSync(to, {recursive: true});
+  (fs.readdirSync as any)(from, {withFileTypes: true}).forEach((entry: any) => {
+    if (entry.name === '.git') return;
+    const src = path.join(from, entry.name);
+    const dst = path.join(to, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(src, dst);
+    else if (entry.isFile()) fs.copyFileSync(src, dst);
+  });
+}
 
 type CommitAuthors = {
   [sha: string]: Author,
@@ -55,10 +68,51 @@ export class Hierarchy {
         await pull(dir, repo, commit);
       } catch (error) {
         console.error(`Failed to update ${repo}:`, errorSummary(error));
+        await this.seedFromBundled(dir, repo);
       }
     }
     this.refresh();
   };
+
+  // The public/ content dirs are a disposable pull cache. When a pull
+  // fails and the cached copy is unusable (missing, empty, or a git
+  // checkout whose HEAD no longer resolves), fall back to the content
+  // bundled in this repository (the repo-root algorithms/ and
+  // leetcode/ folders) so the app and the admin console still have
+  // content to show. A displaced copy is moved aside, never deleted.
+  private async seedFromBundled(dir: string, repo: string): Promise<void> {
+    const bundled = path.resolve(rootDir, '..', path.basename(dir));
+    if (!fs.existsSync(bundled)) return;
+    if (await this.isUsableCopy(dir)) return;
+    try {
+      if (fs.existsSync(dir)) {
+        const aside = `${dir}.broken-${Date.now()}`;
+        fs.renameSync(dir, aside);
+        console.error(`Content ${repo}: existing copy unusable, moved aside to ${path.basename(aside)}`);
+      }
+      copyDirRecursive(bundled, dir);
+      console.error(`Content ${repo}: seeded from bundled repo content`);
+    } catch (error) {
+      console.error(`Content ${repo}: seeding failed:`, errorSummary(error));
+    }
+  }
+
+  private async isUsableCopy(dir: string): Promise<boolean> {
+    try {
+      const entries = (fs.readdirSync as any)(dir, {withFileTypes: true});
+      if (!entries.some((entry: any) => entry.isDirectory() && !entry.name.startsWith('.'))) return false;
+    } catch (error) {
+      return false;
+    }
+    if (fs.existsSync(path.join(dir, '.git'))) {
+      try {
+        await execute('git rev-parse --verify HEAD', {cwd: dir});
+      } catch (error) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   async cacheCommitAuthors(page = 1, commitAuthors: CommitAuthors = {}): Promise<CommitAuthors> {
     const per_page = 100;
