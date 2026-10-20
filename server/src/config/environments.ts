@@ -23,9 +23,6 @@ const {
 
   GITHUB_CLIENT_ID,
   GITHUB_CLIENT_SECRET,
-
-  AWS_ACCESS_KEY_ID,
-  AWS_SECRET_ACCESS_KEY,
 } = process.env as {
   [key: string]: string,
 };
@@ -49,8 +46,6 @@ const missingVars = [
   ] : []),
   'GITHUB_CLIENT_ID',
   'GITHUB_CLIENT_SECRET',
-  'AWS_ACCESS_KEY_ID',
-  'AWS_SECRET_ACCESS_KEY',
 ].filter(variable => process.env[variable] === undefined);
 if (missingVars.length) throw new Error(`The following environment variables are missing: ${missingVars.join(', ')}`);
 
@@ -92,6 +87,3 @@ if (isEnabled(CREDENTIALS_ENABLED)) {
 
 export const githubClientId = GITHUB_CLIENT_ID;
 export const githubClientSecret = GITHUB_CLIENT_SECRET;
-
-export const awsAccessKeyId = AWS_ACCESS_KEY_ID;
-export const awsSecretAccessKey = AWS_SECRET_ACCESS_KEY;

@@ -3,21 +3,20 @@ import child_process from 'child_process';
 import express from 'express';
 import uuid from 'uuid';
 import fs from 'fs-extra';
-import { LambdaTracer } from 'tracers/LambdaTracer';
+import { Release, Tracer } from 'tracers/Tracer';
 import { timeLimit } from 'config/constants';
 import { codesDir } from 'config/paths';
 
-// Java runs locally by default: user code is compiled with javac against
-// the vendored tracers.java library (repo-root tracers.java/, the sibling
-// of tracers.py/) and executed with a local java subprocess - the same
-// recipe the AWS Lambda extractor used (write Main.java, compile, run
-// with ALGORITHM_VISUALIZER=1, serve the visualization.json the library
-// writes). The Lambda route is kept as an opt-in: set JAVA_TRACER=lambda
-// (and provide real AWS credentials) to use extractor-java instead.
-// The library's only dependency, Gson, is vendored at lib/gson-2.8.5.jar.
+// Java runs locally, like Python: user code is compiled with javac
+// against the vendored tracers.java library (repo-root tracers.java/,
+// the sibling of tracers.py/) and executed with a local java subprocess
+// (write Main.java, compile, run with ALGORITHM_VISUALIZER=1, serve the
+// visualization.json the library writes). The library's only dependency,
+// Gson, is vendored at lib/gson-2.8.5.jar. There is no remote execution
+// path: nothing here talks to AWS.
 // NOTE: a subprocess is not a sandbox. Do not expose this server publicly
 // without putting the Java execution behind Docker first.
-export class JavaTracer extends LambdaTracer {
+export class JavaTracer extends Tracer {
   private readonly librarySourceDir: string;
   private readonly libraryClassesDir: string;
   private readonly gsonJar: string;
@@ -32,10 +31,20 @@ export class JavaTracer extends LambdaTracer {
     this.gsonJar = path.resolve(__dirname, 'lib', 'gson-2.8.5.jar');
   }
 
+  build(release: Release) {
+    // Nothing to build ahead of time: the library is compiled lazily on
+    // the first request (see ensureLibrary) and cached under codesDir.
+    return Promise.resolve();
+  }
+
+  async update() {
+    // The Java library is vendored in this repo (tracers.java/), so there
+    // is no upstream release to track; skipping the base class's GitHub
+    // fetch also keeps boot free of network calls for this tracer.
+    return Promise.resolve();
+  }
+
   route(router: express.Router) {
-    if (process.env.JAVA_TRACER === 'lambda') {
-      return super.route(router);
-    }
     router.post(`/${this.lang}`, (req, res, next) => {
       const {code} = req.body;
       const tempPath = path.resolve(codesDir, uuid.v4());
