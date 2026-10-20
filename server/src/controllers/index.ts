@@ -1,3 +1,4 @@
+export { AdminController } from './AdminController';
 export { AiController } from './AiController';
 export { AlgorithmsController } from './AlgorithmsController';
 export { AuthController } from './AuthController';

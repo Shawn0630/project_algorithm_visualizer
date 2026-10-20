@@ -1,6 +1,8 @@
 import express from 'express';
 import axios from 'axios';
 import { Controller } from 'controllers/Controller';
+import { appendAiCall } from 'utils/aiCallLog';
+import { checkSyntax } from 'utils/syntaxCheck';
 import Server from 'Server';
 
 // AI coding assistant for the editor ("coding pad"). The frontend sends
@@ -91,7 +93,25 @@ export class AiController extends Controller {
     const baseUrl = process.env.LLM_BASE_URL;
     const apiKey = process.env['LLM_API' + '_KEY'];
     const model = process.env.LLM_MODEL;
+    const startedAt = Date.now();
+    const logCall = (partial: object) => appendAiCall({
+      ts: new Date().toISOString(),
+      status: 'ok',
+      model: model || null,
+      language: String(language || 'js'),
+      instruction,
+      context: context || null,
+      history: turns,
+      code,
+      rawResponse: null,
+      reply: null,
+      syntax: null,
+      error: null,
+      ...partial,
+      durationMs: Date.now() - startedAt,
+    } as any);
     if (!baseUrl || !apiKey || !model) {
+      logCall({status: 'not_configured'});
       return res.status(503).json({
         message: '服务器未配置 LLM。请在 server/.env 里设置 LLM_BASE_URL、LLM_API_KEY、LLM_MODEL 后重启 server。',
       });
@@ -112,13 +132,22 @@ export class AiController extends Controller {
       });
       const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
       if (typeof content !== 'string') {
+        logCall({status: 'error', error: 'LLM 返回了无法识别的内容。'});
         return res.status(502).json({message: 'LLM 返回了无法识别的内容。'});
       }
       const reply = parseReply(content);
-      return res.json({...reply, changed: reply.code !== code});
+      const changed = reply.code !== code;
+      // Check the proposal compiles before the user is asked to review
+      // it; a broken proposal is labelled, not silently handed over.
+      const syntax = changed ? await checkSyntax(String(language || 'js'), reply.code) : null;
+      const fullReply = {...reply, changed};
+      logCall({status: 'ok', rawResponse: content, reply: fullReply, syntax});
+      return res.json({...fullReply, syntax});
     } catch (error) {
       const upstream = error && error.response && error.response.data && error.response.data.error && error.response.data.error.message;
-      return res.status(502).json({message: `LLM 调用失败：${upstream || (error && error.message) || 'unknown error'}`});
+      const message = `LLM 调用失败：${upstream || (error && error.message) || 'unknown error'}`;
+      logCall({status: 'error', error: message});
+      return res.status(502).json({message});
     }
   };
 }

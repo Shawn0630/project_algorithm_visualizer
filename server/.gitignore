@@ -15,3 +15,6 @@
 
 # downloaded files
 /public
+
+# AI call log (contains user code/instructions; local only)
+/data

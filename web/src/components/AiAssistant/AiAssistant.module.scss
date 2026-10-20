@@ -86,6 +86,64 @@
         font-weight: bold;
         border-radius: 6px;
         cursor: pointer;
+
+        &:disabled {
+          opacity: .5;
+          cursor: default;
+        }
+      }
+
+      .syntax_ok {
+        margin-top: 6px;
+        color: $color-active;
+      }
+
+      .syntax_bad {
+        margin-top: 6px;
+        color: #ff8080;
+
+        .chip {
+          margin-top: 6px;
+        }
+      }
+
+      .hunk {
+        margin-top: 8px;
+        border: 1px solid $color-border;
+        border-radius: 6px;
+        overflow: hidden;
+
+        &.hunk_dropped {
+          opacity: .45;
+        }
+
+        .hunk_header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 4px 8px;
+          background-color: $theme-normal;
+        }
+
+        .hunk_lines {
+          font-family: $font-family-monospace;
+          font-size: $font-size-normal;
+          overflow-x: auto;
+
+          .line_same, .line_del, .line_add {
+            padding: 0 8px;
+            white-space: pre;
+            line-height: 1.45;
+          }
+
+          .line_del {
+            background-color: rgba(#ff5050, .14);
+          }
+
+          .line_add {
+            background-color: rgba($color-active, .14);
+          }
+        }
       }
     }
   }

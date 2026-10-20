@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Algorithm Visualizer · Admin</title>
+<style>
+  :root { --bg:#0a0e14; --panel:#10151d; --panel2:#1c2534; --border:#232e40; --text:#c9d4e2; --accent:#4c8dff; --green:#34c759; --red:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 -apple-system,"Segoe UI",Inter,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--border); }
+  header h1 { font-size:16px; margin:0; }
+  .warn { color:var(--red); font-size:12px; }
+  .tabs { display:flex; gap:8px; margin-left:auto; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:5px 12px; cursor:pointer; }
+  button:hover { filter:brightness(1.25); }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.danger { border-color:var(--red); color:var(--red); }
+  button.active { background:var(--accent); color:#fff; }
+  main { padding:16px; }
+  .layout { display:flex; gap:16px; align-items:flex-start; }
+  .tree { width:300px; flex-shrink:0; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px; max-height:75vh; overflow:auto; }
+  .tree .cat { font-weight:bold; margin:8px 0 2px; opacity:.75; }
+  .tree .algo { padding:2px 6px; border-radius:4px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tree .algo:hover, .tree .algo.sel { background:var(--panel2); }
+  .editor { flex:1; min-width:0; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px; }
+  .editor .path { font-family:ui-monospace,Menlo,monospace; opacity:.8; margin-bottom:8px; word-break:break-all; }
+  textarea { width:100%; height:52vh; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:10px; font-family:ui-monospace,Menlo,monospace; font-size:13px; }
+  .files { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .files button.sel { background:var(--accent); color:#fff; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+  .note { opacity:.65; font-size:12px; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--border); }
+  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  tr.call { cursor:pointer; } tr.call:hover { background:var(--panel2); }
+  .ok { color:var(--green); } .bad { color:var(--red); }
+  pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; max-height:40vh; white-space:pre-wrap; word-break:break-word; font-size:12px; }
+  .detail h3 { margin:14px 0 6px; font-size:13px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Algorithm Visualizer · Admin</h1>
+  <span class="warn">无登录验证 — 仅限本地 / 内网使用，不要暴露到公网</span>
+  <div class="tabs">
+    <button id="tabContent" class="active">内容管理</button>
+    <button id="tabAi">AI 调用日志</button>
+  </div>
+</header>
+<main>
+  <section id="viewContent">
+    <div class="toolbar">
+      <span>来源：</span>
+      <button id="srcAlgorithms" class="active">Algorithms</button>
+      <button id="srcLeetcode">LeetCode</button>
+      <button id="btnRefresh">刷新（重读磁盘）</button>
+      <button id="btnRepull">重新拉取（git）</button>
+      <button id="btnNewAlgo" class="primary">新建算法</button>
+      <span class="note">编辑保存在工作副本里，应用立即生效；不会自动提交 git — 下次拉取会被覆盖，长期修改请提交到局域网 git 服务器的对应仓库。</span>
+    </div>
+    <div class="layout">
+      <div class="tree" id="tree"></div>
+      <div class="editor">
+        <div class="path" id="currentPath">从左侧选择一个算法</div>
+        <div class="files" id="fileList"></div>
+        <textarea id="fileEditor" placeholder="选择文件后在这里编辑"></textarea>
+        <div class="toolbar" style="margin-top:10px">
+          <button id="btnSave" class="primary">保存</button>
+          <button id="btnNewFile">新建文件</button>
+          <button id="btnDeleteFile" class="danger">删除当前文件</button>
+          <button id="btnDeleteAlgo" class="danger">删除当前算法</button>
+          <span class="note" id="saveStatus"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section id="viewAi" class="hidden">
+    <div class="toolbar">
+      <button id="btnReloadCalls">刷新</button>
+      <span class="note">每次 AI 助手调用的完整记录：发送给模型的 input、模型原始返回、解析结果与语法检查。日志在 server/data/ai-calls.jsonl（不进 git）。</span>
+    </div>
+    <table>
+      <thead><tr><th>时间</th><th>状态</th><th>模型</th><th>语言</th><th>指令</th><th>语法</th><th>耗时</th></tr></thead>
+      <tbody id="callRows"></tbody>
+    </table>
+    <div class="detail" id="callDetail"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api = (method, url, body) => fetch(url, {
+  method, headers: {'Content-Type': 'application/json'},
+  body: body ? JSON.stringify(body) : undefined,
+}).then(async r => { const data = await r.json().catch(() => ({})); if (!r.ok) throw new Error(data.message || r.status); return data; });
+
+// ---------- 内容管理 ----------
+let contentData = {algorithms: [], leetcode: []};
+let source = 'algorithms';
+let sel = {category: null, algorithm: null, file: null};
+
+async function loadContent() {
+  contentData = await api('GET', '/api/admin/content');
+  renderTree();
+}
+function currentAlgorithms() { return contentData[source]; }
+function renderTree() {
+  const tree = $('tree');
+  tree.innerHTML = currentAlgorithms().map(cat =>
+    `<div class="cat">${esc(cat.category)}</div>` + cat.algorithms.map(algo =>
+      `<div class="algo ${sel.category === cat.category && sel.algorithm === algo.name ? 'sel' : ''}" data-cat="${esc(cat.category)}" data-algo="${esc(algo.name)}">${esc(algo.name)}</div>`
+    ).join('')
+  ).join('') || '<div class="note">（空）</div>';
+  tree.querySelectorAll('.algo').forEach(el => el.addEventListener('click', () => selectAlgorithm(el.dataset.cat, el.dataset.algo)));
+}
+function findAlgo() {
+  const cat = currentAlgorithms().find(c => c.category === sel.category);
+  return cat ? cat.algorithms.find(a => a.name === sel.algorithm) : null;
+}
+function selectAlgorithm(category, algorithm) {
+  sel = {category, algorithm, file: null};
+  renderTree(); renderFiles();
+  $('fileEditor').value = '';
+  $('currentPath').textContent = `${source}/${category}/${algorithm}`;
+  const algo = findAlgo();
+  if (algo && algo.files.length) selectFile(algo.files.includes('README.md') ? 'README.md' : algo.files[0]);
+}
+function renderFiles() {
+  const algo = findAlgo();
+  $('fileList').innerHTML = algo ? algo.files.map(f =>
+    `<button class="${sel.file === f ? 'sel' : ''}" data-file="${esc(f)}">${esc(f)}</button>`).join('') : '';
+  $('fileList').querySelectorAll('button').forEach(b => b.addEventListener('click', () => selectFile(b.dataset.file)));
+}
+async function selectFile(file) {
+  sel.file = file; renderFiles();
+  const q = new URLSearchParams({source, category: sel.category, algorithm: sel.algorithm, file});
+  const {content} = await api('GET', '/api/admin/content/file?' + q);
+  $('fileEditor').value = content;
+  $('currentPath').textContent = `${source}/${sel.category}/${sel.algorithm}/${file}`;
+  $('saveStatus').textContent = '';
+}
+$('srcAlgorithms').onclick = () => { source = 'algorithms'; sel = {category:null, algorithm:null, file:null}; $('srcAlgorithms').classList.add('active'); $('srcLeetcode').classList.remove('active'); renderTree(); renderFiles(); };
+$('srcLeetcode').onclick = () => { source = 'leetcode'; sel = {category:null, algorithm:null, file:null}; $('srcLeetcode').classList.add('active'); $('srcAlgorithms').classList.remove('active'); renderTree(); renderFiles(); };
+$('btnRefresh').onclick = async () => { await api('POST', '/api/admin/content/refresh'); await loadContent(); };
+$('btnRepull').onclick = async () => { $('btnRepull').textContent = '拉取中（可能较久）…'; try { await api('POST', '/api/admin/content/repull'); await loadContent(); } finally { $('btnRepull').textContent = '重新拉取（git）'; } };
+$('btnNewAlgo').onclick = async () => {
+  const category = prompt('分类名（可新建分类）:'); if (!category) return;
+  const name = prompt('算法名:'); if (!name) return;
+  await api('POST', '/api/admin/content/algorithm', {source, category, name});
+  await loadContent(); selectAlgorithm(category, name);
+};
+$('btnSave').onclick = async () => {
+  if (!sel.file) return;
+  await api('PUT', '/api/admin/content/file', {source, category: sel.category, algorithm: sel.algorithm, file: sel.file, content: $('fileEditor').value});
+  $('saveStatus').textContent = '已保存 ✓';
+};
+$('btnNewFile').onclick = async () => {
+  if (!sel.algorithm) return;
+  const name = prompt('文件名（如 Code.py / README.md）:'); if (!name) return;
+  await api('POST', '/api/admin/content/file', {source, category: sel.category, algorithm: sel.algorithm, name});
+  await loadContent(); selectAlgorithm(sel.category, sel.algorithm); selectFile(name);
+};
+$('btnDeleteFile').onclick = async () => {
+  if (!sel.file || !confirm(`删除文件 ${sel.file}？`)) return;
+  const q = new URLSearchParams({source, category: sel.category, algorithm: sel.algorithm, file: sel.file});
+  await api('DELETE', '/api/admin/content/file?' + q);
+  await loadContent(); selectAlgorithm(sel.category, sel.algorithm);
+};
+$('btnDeleteAlgo').onclick = async () => {
+  if (!sel.algorithm || !confirm(`删除算法 ${sel.algorithm}（含全部文件）？`)) return;
+  const q = new URLSearchParams({source, category: sel.category, algorithm: sel.algorithm});
+  await api('DELETE', '/api/admin/content/algorithm?' + q);
+  sel = {category: null, algorithm: null, file: null};
+  await loadContent(); renderFiles(); $('fileEditor').value = ''; $('currentPath').textContent = '从左侧选择一个算法';
+};
+
+// ---------- AI 调用日志 ----------
+async function loadCalls() {
+  const {calls} = await api('GET', '/api/admin/ai-calls?limit=50');
+  $('callRows').innerHTML = calls.map((c, i) => `<tr class="call" data-i="${i}">
+    <td>${esc(new Date(c.ts).toLocaleString())}</td>
+    <td class="${c.status === 'ok' ? 'ok' : 'bad'}">${esc(c.status)}</td>
+    <td>${esc(c.model || '-')}</td><td>${esc(c.language)}</td>
+    <td>${esc((c.instruction || '').slice(0, 60))}</td>
+    <td>${c.syntax ? (c.syntax.ok ? '<span class="ok">通过</span>' : '<span class="bad">未通过</span>') : '-'}</td>
+    <td>${c.durationMs} ms</td></tr>`).join('') || '<tr><td colspan="7">暂无调用记录</td></tr>';
+  $('callRows').querySelectorAll('tr.call').forEach(row => row.addEventListener('click', () => {
+    const c = calls[Number(row.dataset.i)];
+    $('callDetail').innerHTML =
+      `<h3>发送给模型的 input</h3><pre>${esc(JSON.stringify({model: c.model, language: c.language, context: c.context, history: c.history, instruction: c.instruction, code: c.code}, null, 2))}</pre>` +
+      `<h3>模型原始返回 (raw response)</h3><pre>${esc(c.rawResponse || '(无)')}</pre>` +
+      `<h3>解析结果 / 语法检查 / 错误</h3><pre>${esc(JSON.stringify({reply: c.reply, syntax: c.syntax, error: c.error}, null, 2))}</pre>`;
+  }));
+}
+$('btnReloadCalls').onclick = loadCalls;
+
+// ---------- Tabs ----------
+$('tabContent').onclick = () => { $('viewContent').classList.remove('hidden'); $('viewAi').classList.add('hidden'); $('tabContent').classList.add('active'); $('tabAi').classList.remove('active'); };
+$('tabAi').onclick = () => { $('viewAi').classList.remove('hidden'); $('viewContent').classList.add('hidden'); $('tabAi').classList.add('active'); $('tabContent').classList.remove('active'); loadCalls(); };
+
+loadContent();
+</script>
+</body>
+</html>

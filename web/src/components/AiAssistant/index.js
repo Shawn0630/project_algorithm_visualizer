@@ -3,6 +3,7 @@ import { connect } from 'react-redux';
 import { actions } from 'reducers';
 import { AiApi } from 'apis';
 import { extension } from 'common/util';
+import { computeHunks, applyHunks } from './diff';
 import styles from './AiAssistant.module.scss';
 
 // AI assistant with a per-pad session. Every code pad (one file of one
@@ -77,6 +78,11 @@ class AiAssistant extends React.Component {
   // whether the user applied it.
   buildHistory(session) {
     const turns = [];
+    const noteFor = message => message.superseded
+      ? '这份提案被后续对话取代，未应用'
+      : message.applied
+        ? (message.partial ? '这份代码是提案被部分应用后的编辑器结果' : '这份代码已被用户应用到编辑器')
+        : '这份代码未被用户采用';
     const aiTurn = (text, code, note) => ({
       role: 'assistant',
       content: code ? `${text}\n\n\`\`\`\n${code}\n\`\`\`\n（${note}）` : text,
@@ -85,7 +91,7 @@ class AiAssistant extends React.Component {
       if (message.from === 'user') {
         turns.push({ role: 'user', content: message.text });
       } else {
-        turns.push(aiTurn(message.text, message.code, message.applied ? '这份代码已被用户应用到编辑器' : '这份代码未被用户采用'));
+        turns.push(aiTurn(message.text, message.code, noteFor(message)));
       }
     });
     if (session.pending) {
@@ -102,17 +108,18 @@ class AiAssistant extends React.Component {
     // switches files while waiting.
     const key = this.padKey();
 
-    // Fold a still-pending proposal into the history as not applied,
+    // Fold a still-pending proposal into the history as superseded,
     // then start the new turn.
     const session = this.session();
     const messages = [...session.messages];
     if (session.pending) {
-      messages.push({ from: 'ai', text: session.pending.explanation, code: session.pending.code, applied: false });
+      messages.push({ from: 'ai', text: session.pending.explanation, code: session.pending.code, applied: false, superseded: true });
     }
     messages.push({ from: 'user', text });
     const history = this.buildHistory({ messages: messages.slice(0, -1), pending: null });
     this.updateSession({ messages, pending: null }, key);
     this.setState({ busy: true, error: '', instruction: '' });
+    const sentCode = editingFile.content;
 
     AiApi.assist({
       code: editingFile.content,
@@ -124,10 +131,13 @@ class AiAssistant extends React.Component {
         fileName: editingFile.name,
         files: (files || []).map(file => file.name),
       },
-    }).then(({ code, explanation, changed }) => {
+    }).then(({ code, explanation, changed, syntax }) => {
       this.setState({ busy: false });
       if (changed && code) {
-        this.updateSession({ pending: { code, explanation: explanation || '' } }, key);
+        // The proposal is consumed into a line diff against the code
+        // that was sent; the user accepts hunks, not a blind replace.
+        const hunks = computeHunks(sentCode, code).map(hunk => ({ ...hunk, accepted: true }));
+        this.updateSession({ pending: { code, explanation: explanation || '', syntax: syntax || null, hunks } }, key);
       } else {
         const current = this.sessionFor(key);
         this.updateSession({
@@ -143,13 +153,40 @@ class AiAssistant extends React.Component {
     });
   }
 
-  acceptProposal() {
+  toggleHunk(hunkId) {
+    const session = this.session();
+    if (!session.pending) return;
+    this.updateSession({
+      pending: {
+        ...session.pending,
+        hunks: session.pending.hunks.map(hunk => hunk.id === hunkId ? { ...hunk, accepted: !hunk.accepted } : hunk),
+      },
+    });
+  }
+
+  // Applies only the accepted hunks onto the CURRENT editor content.
+  applySelected() {
     const { editingFile } = this.props.current;
     const session = this.session();
     if (!editingFile || !session.pending) return;
-    this.props.modifyFile(editingFile, session.pending.code);
+    const accepted = session.pending.hunks.filter(hunk => hunk.accepted);
+    if (!accepted.length) return;
+    const result = applyHunks(editingFile.content, accepted);
+    if (result.applied === 0) {
+      this.setState({ error: '所选段落的原文已被你在编辑器里改动，无法定位应用；可以丢弃提案后重新提问。' });
+      return;
+    }
+    if (result.text !== editingFile.content) {
+      this.props.modifyFile(editingFile, result.text);
+    }
     this.updateSession({
-      messages: [...session.messages, { from: 'ai', text: session.pending.explanation, code: session.pending.code, applied: true }],
+      messages: [...session.messages, {
+        from: 'ai',
+        text: session.pending.explanation,
+        code: result.text,
+        applied: true,
+        partial: accepted.length < session.pending.hunks.length || result.failed.length > 0,
+      }],
       pending: null,
     });
   }
@@ -163,8 +200,65 @@ class AiAssistant extends React.Component {
     });
   }
 
+  sendFixSyntax() {
+    const session = this.session();
+    if (!session.pending || !session.pending.syntax || session.pending.syntax.ok) return;
+    this.send(`你上一版返回的代码没有通过语法检查，报错如下：\n${session.pending.syntax.error}\n请修复这个问题后返回完整代码，其他部分保持不变。`);
+  }
+
   clearSession() {
     this.updateSession(emptySession());
+  }
+
+  renderPending(session) {
+    const pending = session.pending;
+    const acceptedCount = pending.hunks.filter(hunk => hunk.accepted).length;
+    return (
+      <div className={styles.pending}>
+        {pending.explanation ? <div className={styles.text}>{pending.explanation}</div> : null}
+        {
+          pending.syntax ? (
+            pending.syntax.ok ? (
+              <div className={styles.syntax_ok}>✓ 语法检查通过</div>
+            ) : (
+              <div className={styles.syntax_bad}>
+                <div>⚠ 语法检查未通过 — 应用前请注意，或让 AI 先修：</div>
+                <pre className={styles.code}>{pending.syntax.error}</pre>
+                <button className={styles.chip} onClick={() => this.sendFixSyntax()}>让 AI 修复这个错误</button>
+              </div>
+            )
+          ) : null
+        }
+        {
+          pending.hunks.map(hunk => (
+            <div key={hunk.id} className={`${styles.hunk} ${hunk.accepted ? '' : styles.hunk_dropped}`}>
+              <div className={styles.hunk_header}>
+                <span>修改 {hunk.id + 1}</span>
+                <button className={styles.chip} onClick={() => this.toggleHunk(hunk.id)}>
+                  {hunk.accepted ? '✓ 保留此段' : '已丢弃（点击恢复）'}
+                </button>
+              </div>
+              <div className={styles.hunk_lines}>
+                {
+                  hunk.lines.map((line, i) => (
+                    <div key={i} className={styles[`line_${line.type}`]}>
+                      {line.type === 'del' ? '- ' : line.type === 'add' ? '+ ' : '  '}{line.line}
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          ))
+        }
+        <div className={styles.row}>
+          <button className={styles.accept} disabled={!acceptedCount} onClick={() => this.applySelected()}>
+            应用所选修改（{acceptedCount}/{pending.hunks.length}）
+          </button>
+          <button className={styles.chip} onClick={() => this.rejectProposal()}>✗ 全部丢弃</button>
+          <span className={styles.status}>或在下面继续追问</span>
+        </div>
+      </div>
+    );
   }
 
   renderCodeCard(message, statusText) {
@@ -214,7 +308,7 @@ class AiAssistant extends React.Component {
                     <div key={i} className={styles.ai_message}>
                       {
                         message.code
-                          ? this.renderCodeCard(message, message.applied ? '✓ 已应用到编辑器' : '未采用')
+                          ? this.renderCodeCard(message, message.applied ? (message.partial ? '✓ 已部分应用' : '✓ 已应用到编辑器') : '未采用')
                           : <div className={styles.text}>{message.text}</div>
                       }
                     </div>
@@ -222,17 +316,7 @@ class AiAssistant extends React.Component {
                 ))
               }
               {
-                session.pending ? (
-                  <div className={styles.pending}>
-                    {session.pending.explanation ? <div className={styles.text}>{session.pending.explanation}</div> : null}
-                    <pre className={styles.code}>{session.pending.code}</pre>
-                    <div className={styles.row}>
-                      <button className={styles.accept} onClick={() => this.acceptProposal()}>✓ 应用到编辑器</button>
-                      <button className={styles.chip} onClick={() => this.rejectProposal()}>✗ 丢弃</button>
-                      <span className={styles.status}>或在下面继续追问</span>
-                    </div>
-                  </div>
-                ) : null
+                session.pending ? this.renderPending(session) : null
               }
               {busy ? <div className={styles.ai_message}>思考中…</div> : null}
             </div>
