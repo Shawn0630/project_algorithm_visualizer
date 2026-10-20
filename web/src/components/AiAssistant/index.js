@@ -2,7 +2,7 @@ import React from 'react';
 import { connect } from 'react-redux';
 import { actions } from 'reducers';
 import { AiApi } from 'apis';
-import { extension } from 'common/util';
+import { extension, aiPadKey, AI_SESSION_DELETE_EVENT } from 'common/util';
 import { computeHunks, applyHunks } from './diff';
 import styles from './AiAssistant.module.scss';
 
@@ -86,12 +86,29 @@ class AiAssistant extends React.Component {
     }
   }
 
+  componentDidMount() {
+    // When a code file is deleted (tab close or the editor's Delete
+    // File button), its AI session is deleted with it.
+    this.handleSessionDelete = event => this.dropSession(event.detail);
+    window.addEventListener(AI_SESSION_DELETE_EVENT, this.handleSessionDelete);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener(AI_SESSION_DELETE_EVENT, this.handleSessionDelete);
+  }
+
+  dropSession(key) {
+    if (!key || !(key in this.state.sessions)) return;
+    this.setState(prev => {
+      const sessions = { ...prev.sessions };
+      delete sessions[key];
+      return { sessions };
+    });
+  }
+
   padKey() {
-    const { algorithm, scratchPaper, editingFile } = this.props.current;
-    if (!editingFile) return null;
-    const page = scratchPaper ? `scratch:${scratchPaper.gistId}` :
-      algorithm ? `${algorithm.categoryKey}/${algorithm.algorithmKey}` : 'home';
-    return `${page}:${editingFile.name}`;
+    const { editingFile } = this.props.current;
+    return editingFile ? aiPadKey(this.props.current, editingFile.name) : null;
   }
 
   session() {

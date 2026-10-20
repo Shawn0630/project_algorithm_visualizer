@@ -42,6 +42,22 @@
         }
       }
 
+      .close {
+        margin-left: 8px;
+        opacity: .5;
+        flex-shrink: 0;
+
+        &:hover {
+          opacity: 1;
+        }
+
+        &.armed {
+          opacity: 1;
+          color: #ff8080;
+          font-weight: bold;
+        }
+      }
+
       &.selected {
         border-left: 1px solid $color-border;
         border-right: 1px solid $color-border;

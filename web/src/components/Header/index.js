@@ -10,17 +10,16 @@ import faCaretDown from '@fortawesome/fontawesome-free-solid/faCaretDown';
 import faCaretRight from '@fortawesome/fontawesome-free-solid/faCaretRight';
 import faCodeBranch from '@fortawesome/fontawesome-free-solid/faCodeBranch';
 import faExpandArrowsAlt from '@fortawesome/fontawesome-free-solid/faExpandArrowsAlt';
+import faCog from '@fortawesome/fontawesome-free-solid/faCog';
 import faBook from '@fortawesome/fontawesome-free-solid/faBook';
 import faComments from '@fortawesome/fontawesome-free-solid/faComments';
 import faGithub from '@fortawesome/fontawesome-free-brands/faGithub';
 import faTrashAlt from '@fortawesome/fontawesome-free-solid/faTrashAlt';
 import faSave from '@fortawesome/fontawesome-free-solid/faSave';
 import faFacebook from '@fortawesome/fontawesome-free-brands/faFacebook';
-import faStar from '@fortawesome/fontawesome-free-solid/faStar';
 import { GitHubApi } from 'apis';
 import { classes, refineGist } from 'common/util';
 import { actions } from 'reducers';
-import { languages } from 'common/config';
 import { BaseComponent, Button, Ellipsis, ListItem, Player } from 'components';
 import styles from './Header.module.scss';
 
@@ -113,7 +112,7 @@ class Header extends BaseComponent {
   render() {
     const { className, onClickTitleBar, navigatorOpened } = this.props;
     const { scratchPaper, titles, saved } = this.props.current;
-    const { ext, user } = this.props.env;
+    const { user } = this.props.env;
 
     const permitted = this.hasPermission();
 
@@ -150,6 +149,7 @@ class Header extends BaseComponent {
             <Button icon={faBook} primary to="/license">License</Button>
             <Button icon={faExpandArrowsAlt} primary
                     onClick={() => this.handleClickFullScreen()}>Fullscreen</Button>
+            <Button icon={faCog} primary href="/api/admin">Admin</Button>
           </div>
         </div>
         <div className={styles.row}>
@@ -166,17 +166,6 @@ class Header extends BaseComponent {
                   <Ellipsis>Sign In</Ellipsis>
                 </Button>
             } */}
-            <Button className={styles.btn_dropdown} icon={faStar}>
-              {languages.find(language => language.ext === ext).name}
-              <div className={styles.dropdown}>
-                {
-                  languages.map(language => language.ext === ext ? null : (
-                    <ListItem key={language.ext} onClick={() => this.props.setExt(language.ext)}
-                              label={language.name}/>
-                  ))
-                }
-              </div>
-            </Button>
           </div>
           <Player className={styles.section}/>
         </div>

@@ -3,12 +3,23 @@ import { connect } from 'react-redux';
 import AutosizeInput from 'react-input-autosize';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import faPlus from '@fortawesome/fontawesome-free-solid/faPlus';
-import { classes } from 'common/util';
+import faTimes from '@fortawesome/fontawesome-free-solid/faTimes';
+import { classes, notifyAiSessionDeleted } from 'common/util';
 import { actions } from 'reducers';
 import { languages } from 'common/config';
 import styles from './TabContainer.module.scss';
 
 class TabContainer extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { armedFile: null };
+    this.armTimeout = null;
+  }
+
+  componentWillUnmount() {
+    if (this.armTimeout) window.clearTimeout(this.armTimeout);
+  }
+
   handleAddFile() {
     const { ext } = this.props.env;
     const { files } = this.props.current;
@@ -17,6 +28,35 @@ class TabContainer extends React.Component {
     let count = 0;
     while (files.some(file => file.name === newFile.name)) newFile.name = `code-${++count}.${ext}`;
     this.props.addFile(newFile);
+  }
+
+  // Two-click close, mirroring the app's confirm-needed buttons: the
+  // first click arms the tab's x, the second deletes the file - and
+  // its AI session goes with it.
+  handleCloseFile(e, file) {
+    e.stopPropagation();
+    if (this.state.armedFile !== file) {
+      if (this.armTimeout) window.clearTimeout(this.armTimeout);
+      this.setState({ armedFile: file });
+      this.armTimeout = window.setTimeout(() => this.setState({ armedFile: null }), 2000);
+      return;
+    }
+    if (this.armTimeout) window.clearTimeout(this.armTimeout);
+    this.setState({ armedFile: null });
+    notifyAiSessionDeleted(this.props.current, file.name);
+    this.props.deleteFile(file);
+  }
+
+  renderClose(file) {
+    if (this.props.current.files.length <= 1) return null;
+    const armed = this.state.armedFile === file;
+    return (
+      <span className={classes(styles.close, armed && styles.armed)}
+            title={armed ? '再点一次确认删除' : '删除此文件'}
+            onClick={e => this.handleCloseFile(e, file)}>
+        {armed ? '确认' : <FontAwesomeIcon fixedWidth icon={faTimes}/>}
+      </span>
+    );
   }
 
   render() {
@@ -34,10 +74,12 @@ class TabContainer extends React.Component {
                 <AutosizeInput className={styles.input_title} value={file.name}
                                onClick={e => e.stopPropagation()}
                                onChange={e => this.props.renameFile(file, e.target.value)}/>
+                {this.renderClose(file)}
               </div>
             ) : (
               <div className={styles.title} key={i} onClick={() => this.props.setEditingFile(file)}>
                 {file.name}
+                {this.renderClose(file)}
               </div>
             ))
           }

@@ -6,11 +6,6 @@
   flex-direction: column;
   min-height: 0;
 
-  .license_item {
-    flex-shrink: 0;
-    border-bottom: 1px solid $color-border;
-  }
-
   .search_bar_container {
     height: $line-height;
     padding: 0 8px;

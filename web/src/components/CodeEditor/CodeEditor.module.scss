@@ -39,6 +39,47 @@
     padding: 4px;
     background-color: $theme-normal;
 
+    .lang_select {
+      position: relative;
+      display: flex;
+      align-items: center;
+      height: 28px;
+      padding: 0 8px;
+      cursor: pointer;
+      font-weight: bold;
+
+      .lang_menu {
+        display: none;
+        position: absolute;
+        left: 0;
+        bottom: 100%;
+        z-index: 98;
+        flex-direction: column;
+        min-width: 140px;
+        padding: 4px 0;
+        background-color: $theme-light;
+        border: 1px solid $color-border;
+        border-radius: $border-radius;
+        box-shadow: 0 8px 24px $color-shadow;
+
+        .lang_item {
+          padding: 6px 12px;
+          white-space: nowrap;
+          font-weight: normal;
+
+          &:hover {
+            background-color: $color-overlay;
+          }
+        }
+      }
+
+      &:hover {
+        .lang_menu {
+          display: flex;
+        }
+      }
+    }
+
     .contributor {
       height: 28px;
       padding: 0 6px;

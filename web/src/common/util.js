@@ -38,6 +38,21 @@ const isSaved = ({ titles, files, lastTitles, lastFiles }) => {
   return serialize(titles, files) === serialize(lastTitles, lastFiles);
 };
 
+// Identity of a code pad (one file of one page) for the AI assistant:
+// each pad owns an AI session under this key, and deleting the file
+// deletes the session with it.
+const aiPadKey = (current, fileName) => {
+  const page = current.scratchPaper ? `scratch:${current.scratchPaper.gistId}` :
+    current.algorithm ? `${current.algorithm.categoryKey}/${current.algorithm.algorithmKey}` : 'home';
+  return `${page}:${fileName}`;
+};
+
+const AI_SESSION_DELETE_EVENT = 'av-ai-session-delete';
+
+const notifyAiSessionDeleted = (current, fileName) => {
+  window.dispatchEvent(new CustomEvent(AI_SESSION_DELETE_EVENT, { detail: aiPadKey(current, fileName) }));
+};
+
 export {
   classes,
   distance,
@@ -47,4 +62,7 @@ export {
   createProjectFile,
   createUserFile,
   isSaved,
+  aiPadKey,
+  AI_SESSION_DELETE_EVENT,
+  notifyAiSessionDeleted,
 };
