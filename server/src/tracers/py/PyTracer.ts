@@ -29,6 +29,14 @@ export class PyTracer extends Tracer {
     return Promise.resolve();
   }
 
+  async update() {
+    // The Python library is vendored in this repo (tracers.py/), so there is
+    // no upstream release to track. Skipping the base class's GitHub fetch
+    // also avoids a noisy 404 on every boot (algorithm-visualizer/tracers.py
+    // does not exist upstream).
+    return Promise.resolve();
+  }
+
   route(router: express.Router) {
     router.post(`/${this.lang}`, (req, res, next) => {
       const {code} = req.body;
