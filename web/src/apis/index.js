@@ -47,6 +47,10 @@ const PATCH = URL => {
   });
 };
 
+const AiApi = {
+  assist: POST('/ai/assist'),
+};
+
 const AlgorithmApi = {
   getCategories: GET('/algorithms'),
   getAlgorithm: GET('/algorithms/:categoryKey/:algorithmKey'),
@@ -106,6 +110,7 @@ const TracerApi = {
 };
 
 export {
+  AiApi,
   AlgorithmApi,
   VisualizationApi,
   GitHubApi,

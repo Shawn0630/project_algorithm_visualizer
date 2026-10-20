@@ -109,7 +109,7 @@ export class JavaTracer extends Tracer {
         if (!error) return resolve();
         if ((error as any).killed) return reject(new Error('Time Limit Exceeded'));
         if ((error as any).code === 'ENOENT') return reject(new Error(notFoundMessage));
-        reject(error.code ? new Error(stderr || error.message) : error);
+        reject((error as any).code ? new Error(stderr || error.message) : error);
       });
     });
   }

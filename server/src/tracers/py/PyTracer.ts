@@ -56,7 +56,7 @@ export class PyTracer extends Tracer {
           }, (error, stdout, stderr) => {
             if (!error) return resolve();
             if ((error as any).killed) return reject(new Error('Time Limit Exceeded'));
-            reject(error.code ? new Error(stderr || error.message) : error);
+            reject((error as any).code ? new Error(stderr || error.message) : error);
           });
         }))
         .then(() => new Promise((resolve, reject) => {

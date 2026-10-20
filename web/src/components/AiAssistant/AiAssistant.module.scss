@@ -1,0 +1,79 @@
+@import "~common/stylesheet/index";
+
+.ai_assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background-color: $theme-normal;
+  border-top: 1px solid $color-border;
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .title {
+    font-weight: bold;
+    white-space: nowrap;
+  }
+
+  .chip {
+    padding: 3px 10px;
+    border: 1px solid $color-border;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color .15s ease;
+
+    &:hover:not(:disabled) {
+      background-color: $color-overlay;
+    }
+
+    &:disabled {
+      opacity: .5;
+      cursor: default;
+    }
+  }
+
+  .input {
+    flex: 1;
+    padding: 6px 10px;
+    background-color: $theme-dark;
+    border: 1px solid $color-border;
+    border-radius: 6px;
+
+    &::placeholder {
+      color: rgba($color-font, .45);
+    }
+  }
+
+  .send {
+    padding: 6px 16px;
+    background-color: $color-selected;
+    color: #ffffff;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity .15s ease;
+
+    &:disabled {
+      opacity: .5;
+      cursor: default;
+    }
+  }
+
+  .message {
+    white-space: pre-wrap;
+    line-height: 1.5;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+
+  .error {
+    color: #ff8080;
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+}

@@ -1,3 +1,4 @@
+export { default as AiAssistant } from './AiAssistant';
 export { default as App } from './App';
 export { default as BaseComponent } from './BaseComponent';
 export { default as Button } from './Button';
