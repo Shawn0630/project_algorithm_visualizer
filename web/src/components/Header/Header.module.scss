@@ -4,6 +4,12 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  // The backdrop filter makes the header its own stacking context, so
+  // the header itself needs the high z-index - otherwise the language
+  // dropdown's z-index is trapped inside it and workspace elements
+  // (e.g. the divider at 97) paint over the open dropdown.
+  position: relative;
+  z-index: 99;
   background-color: rgba($theme-normal, .85);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
