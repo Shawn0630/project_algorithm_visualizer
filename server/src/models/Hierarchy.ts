@@ -33,8 +33,20 @@ export class Hierarchy {
   }
 
   async update(commit?: string) {
-    await pull(this.algorithmPath, 'algorithm-visualizer-content', commit);
-    await pull(this.leetcodePath, 'algorithm-visualizer-leetcode', commit);
+    // Pull each content repo independently: one broken checkout (e.g. a
+    // corrupt git index in the algorithms copy) must not stop the other
+    // repo from updating or the refresh below from running.
+    const pulls: [string, string][] = [
+      [this.algorithmPath, 'algorithm-visualizer-content'],
+      [this.leetcodePath, 'algorithm-visualizer-leetcode'],
+    ];
+    for (const [dir, repo] of pulls) {
+      try {
+        await pull(dir, repo, commit);
+      } catch (error) {
+        console.error(`Failed to update ${repo}:`, error);
+      }
+    }
     this.refresh();
   };
 
