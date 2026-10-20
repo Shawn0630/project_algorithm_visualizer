@@ -8,6 +8,7 @@ export class JsTracer extends Tracer {
 
   constructor() {
     super('js');
+    this.tagName = 'v2.3.9'; // fallback version; overwritten by build() when the latest GitHub release is fetched successfully
     this.workerPath = path.resolve(__dirname, 'worker.js');
   }
 
