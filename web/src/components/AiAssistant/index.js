@@ -6,15 +6,52 @@ import { extension } from 'common/util';
 import { computeHunks, applyHunks } from './diff';
 import styles from './AiAssistant.module.scss';
 
-// AI assistant with a per-pad session. Every code pad (one file of one
-// algorithm / scratch paper) owns a conversation that lives as long as
-// this window: the AI sees the window context (page, file list, the
-// current editor content) plus the session history on every request.
+// AI assistant panel, docked as its own workspace pane next to the
+// code pad (LeetCode-"Leet" style): the conversation fills the pane,
+// the composer sits at the bottom. Every code pad (one file of one
+// algorithm / scratch paper) owns a session; sessions are kept in
+// memory and persisted to localStorage, so each pad's conversation is
+// remembered across file switches and page reloads. On every request
+// the AI sees the window context (page, file list, the current editor
+// content) plus the session history.
 // A code change comes back as a PROPOSAL first - it is written to the
 // editor only when the user accepts it; rejecting it, or simply asking
 // a follow-up, keeps the conversation going with the proposal folded
 // into the history so the AI knows what happened to it.
 const CODE_EXTS = ['js', 'java', 'py', 'cpp'];
+const STORAGE_KEY = 'av-ai-sessions-v1';
+
+function loadSessions() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveSessions(sessions) {
+  try {
+    let data = sessions;
+    if (JSON.stringify(data).length > 2000000) {
+      // Prune: keep the most recent pads, and within each session keep
+      // full code only on the latest AI message (older code mainly fed
+      // follow-up context; the conversation text is what matters).
+      data = {};
+      Object.keys(sessions).slice(-6).forEach(key => {
+        const session = sessions[key];
+        data[key] = {
+          ...session,
+          messages: session.messages.map((message, i) =>
+            i === session.messages.length - 1 ? message : { ...message, code: null }),
+        };
+      });
+    }
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (error) {
+    // Storage full or unavailable: sessions simply stay in memory.
+  }
+}
 
 const PRESETS = [
   {
@@ -36,13 +73,16 @@ const emptySession = () => ({ messages: [], pending: null });
 class AiAssistant extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { sessions: {}, instruction: '', busy: false, error: '' };
+    this.state = { sessions: loadSessions(), instruction: '', busy: false, error: '' };
     this.logRef = React.createRef();
   }
 
   componentDidUpdate(prevProps, prevState) {
-    if (prevState.sessions !== this.state.sessions && this.logRef.current) {
-      this.logRef.current.scrollTop = this.logRef.current.scrollHeight;
+    if (prevState.sessions !== this.state.sessions) {
+      saveSessions(this.state.sessions);
+      if (this.logRef.current) {
+        this.logRef.current.scrollTop = this.logRef.current.scrollHeight;
+      }
     }
   }
 
@@ -273,7 +313,7 @@ class AiAssistant extends React.Component {
 
   render() {
     const { editingFile } = this.props.current;
-    if (!editingFile || !CODE_EXTS.includes(extension(editingFile.name))) return null;
+    const isCode = !!editingFile && CODE_EXTS.includes(extension(editingFile.name));
     const { instruction, busy, error } = this.state;
     const session = this.session();
     const hasSession = session.messages.length > 0 || session.pending;
@@ -284,7 +324,7 @@ class AiAssistant extends React.Component {
           <span className={styles.title}>AI 助手</span>
           {
             PRESETS.map(preset => (
-              <button key={preset.label} className={styles.chip} disabled={busy}
+              <button key={preset.label} className={styles.chip} disabled={busy || !isCode}
                       onClick={() => this.send(preset.instruction)}>
                 {preset.label}
               </button>
@@ -295,41 +335,51 @@ class AiAssistant extends React.Component {
               清空会话
             </button>
           ) : null}
-          <span className={styles.pad_name}>{editingFile.name} 的会话</span>
         </div>
-        {
-          hasSession ? (
-            <div className={styles.log} ref={this.logRef}>
-              {
-                session.messages.map((message, i) => (
-                  message.from === 'user' ? (
-                    <div key={i} className={styles.user_message}>{message.text}</div>
-                  ) : (
-                    <div key={i} className={styles.ai_message}>
-                      {
-                        message.code
-                          ? this.renderCodeCard(message, message.applied ? (message.partial ? '✓ 已部分应用' : '✓ 已应用到编辑器') : '未采用')
-                          : <div className={styles.text}>{message.text}</div>
-                      }
-                    </div>
-                  )
-                ))
-              }
-              {
-                session.pending ? this.renderPending(session) : null
-              }
-              {busy ? <div className={styles.ai_message}>思考中…</div> : null}
-            </div>
-          ) : null
-        }
+        <div className={styles.pad_name}>
+          {editingFile ? `${editingFile.name} 的会话` : '未打开文件'}
+        </div>
+        <div className={styles.log} ref={this.logRef}>
+          {
+            !isCode ? (
+              <div className={styles.empty_state}>
+                当前文件不是代码文件。切到代码文件（.js / .java / .py / .cpp）后，这里会显示那个文件专属的 AI 会话。
+              </div>
+            ) : !hasSession && !busy ? (
+              <div className={styles.empty_state}>
+                这是 {editingFile.name} 专属的 AI 会话，每个文件的会话相互独立、会被记住。可以让 AI 写代码、加 Tracer、解释或找问题；它的改动会先以 diff 提案出现，你逐段确认后才应用到编辑器。
+              </div>
+            ) : (
+              <React.Fragment>
+                {
+                  session.messages.map((message, i) => (
+                    message.from === 'user' ? (
+                      <div key={i} className={styles.user_message}>{message.text}</div>
+                    ) : (
+                      <div key={i} className={styles.ai_message}>
+                        {
+                          message.code
+                            ? this.renderCodeCard(message, message.applied ? (message.partial ? '✓ 已部分应用' : '✓ 已应用到编辑器') : '未采用')
+                            : <div className={styles.text}>{message.text}</div>
+                        }
+                      </div>
+                    )
+                  ))
+                }
+                {session.pending ? this.renderPending(session) : null}
+                {busy ? <div className={styles.ai_message}>思考中…</div> : null}
+              </React.Fragment>
+            )
+          }
+        </div>
         <div className={styles.row}>
-          <input className={styles.input} type="text" value={instruction}
+          <input className={styles.input} type="text" value={instruction} disabled={!isCode}
                  placeholder="告诉 AI 你想对这段代码做什么，例如：把冒泡排序改成快速排序"
                  onChange={e => this.setState({ instruction: e.target.value })}
                  onKeyDown={e => {
                    if (e.key === 'Enter') this.send();
                  }}/>
-          <button className={styles.send} disabled={busy || !instruction.trim()} onClick={() => this.send()}>
+          <button className={styles.send} disabled={busy || !isCode || !instruction.trim()} onClick={() => this.send()}>
             {busy ? '生成中…' : '发送'}
           </button>
         </div>

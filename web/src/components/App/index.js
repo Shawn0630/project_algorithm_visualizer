@@ -5,6 +5,7 @@ import Promise from 'bluebird';
 import { Helmet } from 'react-helmet';
 import queryString from 'query-string';
 import {
+  AiAssistant,
   BaseComponent,
   CodeEditor,
   Header,
@@ -26,8 +27,8 @@ class App extends BaseComponent {
     super(props);
 
     this.state = {
-      workspaceVisibles: [true, true, true],
-      workspaceWeights: [1, 2, 2],
+      workspaceVisibles: [true, true, true, true],
+      workspaceWeights: [1, 2, 1.4, 2],
     };
 
     this.codeEditorRef = React.createRef();
@@ -227,6 +228,12 @@ class App extends BaseComponent {
     this.setState({ workspaceVisibles });
   }
 
+  toggleAiPanelOpened(aiPanelOpened = !this.state.workspaceVisibles[2]) {
+    const workspaceVisibles = [...this.state.workspaceVisibles];
+    workspaceVisibles[2] = aiPanelOpened;
+    this.setState({ workspaceVisibles });
+  }
+
   handleClickTitleBar() {
     this.toggleNavigatorOpened();
   }
@@ -237,6 +244,7 @@ class App extends BaseComponent {
 
     const title = `${saved ? '' : '(Unsaved) '}${titles.join(' - ')}`;
     const [navigatorOpened] = workspaceVisibles;
+    const aiPanelOpened = workspaceVisibles[2];
 
     return (
       <div className={styles.app}>
@@ -246,11 +254,13 @@ class App extends BaseComponent {
         </Helmet>
         <Header className={styles.header} onClickTitleBar={this.handleClickTitleBar}
                 navigatorOpened={navigatorOpened} loadScratchPapers={this.loadScratchPapers}
+                aiPanelOpened={aiPanelOpened} onToggleAiPanel={() => this.toggleAiPanelOpened()}
                 ignoreHistoryBlock={this.ignoreHistoryBlock}/>
         <ResizableContainer className={styles.workspace} horizontal weights={workspaceWeights}
                             visibles={workspaceVisibles} onChangeWeights={this.handleChangeWorkspaceWeights}>
           <Navigator/>
           <VisualizationViewer className={styles.visualization_viewer}/>
+          <AiAssistant/>
           <TabContainer className={styles.editor_tab_container}>
             <CodeEditor ref={this.codeEditorRef}/>
           </TabContainer>

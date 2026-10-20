@@ -5,7 +5,7 @@ import { classes, extension } from 'common/util';
 import { actions } from 'reducers';
 import { connect } from 'react-redux';
 import { languages } from 'common/config';
-import { AiAssistant, Button, Ellipsis, FoldableAceEditor } from 'components';
+import { Button, Ellipsis, FoldableAceEditor } from 'components';
 import styles from './CodeEditor.module.scss';
 
 class CodeEditor extends React.Component {
@@ -55,7 +55,6 @@ class CodeEditor extends React.Component {
             _key: lineIndicator.cursor,
           }] : []}
           value={editingFile.content}/>
-        <AiAssistant/>
         <div className={classes(styles.contributors_viewer, className)}>
           {/* <span className={classes(styles.contributor, styles.label)}>Contributed by</span>
           {

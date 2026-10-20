@@ -11,6 +11,7 @@ import faCaretRight from '@fortawesome/fontawesome-free-solid/faCaretRight';
 import faCodeBranch from '@fortawesome/fontawesome-free-solid/faCodeBranch';
 import faExpandArrowsAlt from '@fortawesome/fontawesome-free-solid/faExpandArrowsAlt';
 import faBook from '@fortawesome/fontawesome-free-solid/faBook';
+import faComments from '@fortawesome/fontawesome-free-solid/faComments';
 import faGithub from '@fortawesome/fontawesome-free-brands/faGithub';
 import faTrashAlt from '@fortawesome/fontawesome-free-solid/faTrashAlt';
 import faSave from '@fortawesome/fontawesome-free-solid/faSave';
@@ -144,6 +145,8 @@ class Header extends BaseComponent {
             } */}
             {/* <Button icon={faFacebook} primary
                     href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`}>Share</Button> */}
+            <Button icon={faComments} primary selected={this.props.aiPanelOpened}
+                    onClick={() => this.props.onToggleAiPanel && this.props.onToggleAiPanel()}>AI 助手</Button>
             <Button icon={faBook} primary to="/license">License</Button>
             <Button icon={faExpandArrowsAlt} primary
                     onClick={() => this.handleClickFullScreen()}>Fullscreen</Button>
