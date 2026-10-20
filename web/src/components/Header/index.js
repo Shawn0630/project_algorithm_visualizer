@@ -10,6 +10,7 @@ import faCaretDown from '@fortawesome/fontawesome-free-solid/faCaretDown';
 import faCaretRight from '@fortawesome/fontawesome-free-solid/faCaretRight';
 import faCodeBranch from '@fortawesome/fontawesome-free-solid/faCodeBranch';
 import faExpandArrowsAlt from '@fortawesome/fontawesome-free-solid/faExpandArrowsAlt';
+import faBook from '@fortawesome/fontawesome-free-solid/faBook';
 import faGithub from '@fortawesome/fontawesome-free-brands/faGithub';
 import faTrashAlt from '@fortawesome/fontawesome-free-solid/faTrashAlt';
 import faSave from '@fortawesome/fontawesome-free-solid/faSave';
@@ -143,6 +144,7 @@ class Header extends BaseComponent {
             } */}
             {/* <Button icon={faFacebook} primary
                     href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`}>Share</Button> */}
+            <Button icon={faBook} primary to="/license">License</Button>
             <Button icon={faExpandArrowsAlt} primary
                     onClick={() => this.handleClickFullScreen()}>Fullscreen</Button>
           </div>
