@@ -31,6 +31,7 @@ function systemPrompt(ext: string) {
     '- Keep the file\'s existing boilerplate and section markers (// import visualization libraries { ... // }, // define tracer variables { ... // }, // visualize { ... // }) and its overall structure; change only what the instruction needs.',
     '- When asked to visualize / add tracers: instrument the algorithm with the tracer API below, call delay after each meaningful step, set the root layout once, and keep the algorithm logic itself unchanged.',
     '- If the instruction only asks for an explanation, return the code unchanged and put the explanation in the explanation field.',
+    '- This is a continuing session for one code pad: earlier turns are included as conversation history. The file content in the latest user message is authoritative - the user may have hand-edited it, or accepted or rejected your earlier proposals.',
     '',
     guide,
   ].join('\n');
@@ -68,10 +69,25 @@ export class AiController extends Controller {
   };
 
   assist = async (req: express.Request, res: express.Response) => {
-    const {code, language, instruction} = req.body;
+    const {code, language, instruction, history, context} = req.body;
     if (typeof code !== 'string' || typeof instruction !== 'string' || !instruction.trim()) {
       return res.status(400).json({message: '请求缺少 code 或 instruction。'});
     }
+    // Conversation history of this pad's session, oldest first. Bounded
+    // so a long session cannot grow the request without limit.
+    const turns: { role: string, content: string }[] = Array.isArray(history)
+      ? history.filter(turn => turn && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string')
+        .slice(-20)
+        .map(turn => ({role: turn.role, content: turn.content.slice(0, 12000)}))
+      : [];
+    const contextNote = context && typeof context === 'object'
+      ? [
+        `Current window: page "${String(context.title || '')}", file "${String(context.fileName || '')}".`,
+        Array.isArray(context.files) && context.files.length
+          ? `Files in this page: ${context.files.map((name: any) => String(name)).join(', ')}.`
+          : '',
+      ].filter(Boolean).join(' ')
+      : '';
     const baseUrl = process.env.LLM_BASE_URL;
     const apiKey = process.env['LLM_API' + '_KEY'];
     const model = process.env.LLM_MODEL;
@@ -86,7 +102,9 @@ export class AiController extends Controller {
         temperature: 0.2,
         messages: [
           {role: 'system', content: systemPrompt(String(language || 'js'))},
-          {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file:\n${code}`},
+          ...(contextNote ? [{role: 'system', content: contextNote}] : []),
+          ...turns,
+          {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`},
         ],
       }, {
         headers: {Authorization: `Bearer ${apiKey}`},
@@ -96,7 +114,8 @@ export class AiController extends Controller {
       if (typeof content !== 'string') {
         return res.status(502).json({message: 'LLM 返回了无法识别的内容。'});
       }
-      return res.json(parseReply(content));
+      const reply = parseReply(content);
+      return res.json({...reply, changed: reply.code !== code});
     } catch (error) {
       const upstream = error && error.response && error.response.data && error.response.data.error && error.response.data.error.message;
       return res.status(502).json({message: `LLM 调用失败：${upstream || (error && error.message) || 'unknown error'}`});
