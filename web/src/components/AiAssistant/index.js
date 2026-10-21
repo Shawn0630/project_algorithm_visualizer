@@ -2,7 +2,7 @@ import React from 'react';
 import { connect } from 'react-redux';
 import { actions } from 'reducers';
 import { AiApi } from 'apis';
-import { extension, aiPadKey, AI_SESSION_DELETE_EVENT } from 'common/util';
+import { extension, aiPadKey, AI_SESSION_DELETE_EVENT, TESTCASES_APPLY_EVENT } from 'common/util';
 import { computeHunks, applyHunks } from './diff';
 import styles from './AiAssistant.module.scss';
 
@@ -167,19 +167,20 @@ class AiAssistant extends React.Component {
       : message.applied
         ? (message.partial ? 'applied to the editor in part (the user kept only some hunks of the proposal)' : 'applied to the editor by the user')
         : 'not applied by the user';
-    const aiTurn = (text, code, note) => ({
+    const aiTurn = (text, code, note, testCases) => ({
       role: 'assistant',
-      content: code ? `${text}\n\n\`\`\`\n${code}\n\`\`\`\n(${note})` : text,
+      content: (code ? `${text}\n\n\`\`\`\n${code}\n\`\`\`\n(${note})` : `${text}\n(${note})`)
+        + (testCases && testCases.length ? `\nTest cases returned with that reply: ${JSON.stringify(testCases)}` : ''),
     });
     session.messages.forEach(message => {
       if (message.from === 'user') {
         turns.push({ role: 'user', content: message.text });
       } else {
-        turns.push(aiTurn(message.text, message.code, noteFor(message)));
+        turns.push(aiTurn(message.text, message.code, noteFor(message), message.testCases));
       }
     });
     if (session.pending) {
-      turns.push(aiTurn(session.pending.explanation, session.pending.code, 'proposed; the user has not decided yet'));
+      turns.push(aiTurn(session.pending.explanation, session.pending.code, 'proposed; the user has not decided yet', session.pending.testCases));
     }
     return turns;
   }
@@ -197,7 +198,10 @@ class AiAssistant extends React.Component {
     const session = this.session();
     const messages = [...session.messages];
     if (session.pending) {
-      messages.push({ from: 'ai', text: session.pending.explanation, code: session.pending.code, applied: false, superseded: true });
+      messages.push({
+        from: 'ai', text: session.pending.explanation, code: session.pending.code, applied: false, superseded: true,
+        testCases: session.pending.testCases || null, testEntry: session.pending.testEntry || '', casesApplied: !!session.pending.casesApplied,
+      });
     }
     messages.push({ from: 'user', text });
     const history = this.buildHistory({ messages: messages.slice(0, -1), pending: null });
@@ -226,19 +230,30 @@ class AiAssistant extends React.Component {
           } : undefined;
         })(),
       },
-    }).then(({ code, explanation, changed, syntax, partialSuspected }) => {
+    }).then(({ code, explanation, changed, syntax, partialSuspected, testCases, entry }) => {
       this.setState({ busy: false });
+      // The third kind of AI result: a set of test cases riding
+      // along with the reply. It is offered as its own apply action
+      // (into this pad's Testcase panel), independent of whether
+      // the reply also changed code.
+      const cases = Array.isArray(testCases) && testCases.length ? testCases : null;
       if (changed && code) {
         // The proposal is consumed into a line diff against the code
         // that was sent; the user accepts hunks, not a blind replace.
         const hunks = computeHunks(sentCode, code).map(hunk => ({ ...hunk, accepted: true }));
         this.updateSession({
-          pending: { code, explanation: explanation || '', syntax: syntax || null, partialSuspected: !!partialSuspected, hunks },
+          pending: {
+            code, explanation: explanation || '', syntax: syntax || null, partialSuspected: !!partialSuspected, hunks,
+            testCases: cases, testEntry: entry || '', casesApplied: false,
+          },
         }, key);
       } else {
         const current = this.sessionFor(key);
         this.updateSession({
-          messages: [...current.messages, { from: 'ai', text: explanation || '(The AI returned no explanation.)', code: null, applied: false }],
+          messages: [...current.messages, {
+            from: 'ai', text: explanation || '(The AI returned no explanation.)', code: null, applied: false,
+            testCases: cases, testEntry: entry || '', casesApplied: false,
+          }],
         }, key);
       }
     }).catch(error => {
@@ -283,6 +298,9 @@ class AiAssistant extends React.Component {
         code: result.text,
         applied: true,
         partial: accepted.length < session.pending.hunks.length || result.failed.length > 0,
+        testCases: session.pending.testCases || null,
+        testEntry: session.pending.testEntry || '',
+        casesApplied: !!session.pending.casesApplied,
       }],
       pending: null,
     });
@@ -292,9 +310,73 @@ class AiAssistant extends React.Component {
     const session = this.session();
     if (!session.pending) return;
     this.updateSession({
-      messages: [...session.messages, { from: 'ai', text: session.pending.explanation, code: session.pending.code, applied: false }],
+      messages: [...session.messages, {
+        from: 'ai', text: session.pending.explanation, code: session.pending.code, applied: false,
+        testCases: session.pending.testCases || null,
+        testEntry: session.pending.testEntry || '',
+        casesApplied: !!session.pending.casesApplied,
+      }],
       pending: null,
     });
+  }
+
+  // Hands a reply's test cases to this pad's Testcase panel, which
+  // ingests them like its own Generate output (and runs them).
+  applyTestCases(testCases, entry) {
+    const key = this.padKey();
+    if (!key || !testCases || !testCases.length) return;
+    window.dispatchEvent(new CustomEvent(TESTCASES_APPLY_EVENT, {
+      detail: { key, entry: entry || '', cases: testCases },
+    }));
+  }
+
+  applyMessageCases(index) {
+    const session = this.session();
+    const message = session.messages[index];
+    if (!message || !message.testCases) return;
+    this.applyTestCases(message.testCases, message.testEntry);
+    this.updateSession({
+      messages: session.messages.map((m, i) => i === index ? { ...m, casesApplied: true } : m),
+    });
+  }
+
+  applyPendingCases() {
+    const session = this.session();
+    if (!session.pending || !session.pending.testCases) return;
+    this.applyTestCases(session.pending.testCases, session.pending.testEntry);
+    this.updateSession({ pending: { ...session.pending, casesApplied: true } });
+  }
+
+  // The card for a reply's test cases: the cases themselves plus
+  // the apply action. Scratch papers have no Testcase panel, so
+  // their card is read-only.
+  renderCasesCard(testCases, entry, applied, onApply) {
+    const key = this.padKey();
+    const isScratch = !!key && key.startsWith('scratch:');
+    return (
+      <div className={styles.cases_card}>
+        <div className={styles.cases_title}>
+          Test cases ({testCases.length}){entry ? ` · entry: ${entry}` : ''}
+        </div>
+        {
+          testCases.map((tc, i) => (
+            <div key={i} className={styles.case_line}>
+              <span className={styles.case_name}>{tc.name}</span>
+              <code>{JSON.stringify(tc.args)} → {JSON.stringify(tc.expected)}</code>
+            </div>
+          ))
+        }
+        {
+          isScratch ? (
+            <div className={styles.status}>Scratch papers have no Testcase panel.</div>
+          ) : (
+            <button className={styles.chip} disabled={applied} onClick={onApply}>
+              {applied ? '✓ Added to the Testcase panel' : 'Add to Testcase panel'}
+            </button>
+          )
+        }
+      </div>
+    );
   }
 
   sendFixSyntax() {
@@ -313,6 +395,9 @@ class AiAssistant extends React.Component {
     return (
       <div className={styles.pending}>
         {pending.explanation ? <div className={styles.text}>{pending.explanation}</div> : null}
+        {
+          pending.testCases ? this.renderCasesCard(pending.testCases, pending.testEntry, pending.casesApplied, () => this.applyPendingCases()) : null
+        }
         {
           pending.partialSuspected ? (
             <div className={styles.syntax_bad}>
@@ -428,6 +513,11 @@ class AiAssistant extends React.Component {
                           message.code
                             ? this.renderCodeCard(message, message.applied ? (message.partial ? '✓ Partially applied' : '✓ Applied to the editor') : 'Not applied')
                             : <div className={styles.text}>{message.text}</div>
+                        }
+                        {
+                          message.testCases
+                            ? this.renderCasesCard(message.testCases, message.testEntry, message.casesApplied, () => this.applyMessageCases(i))
+                            : null
                         }
                       </div>
                     )

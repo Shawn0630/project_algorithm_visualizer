@@ -1,7 +1,7 @@
 import React from 'react';
 import { connect } from 'react-redux';
-import { TestApi } from 'apis';
-import { extension, aiPadKey } from 'common/util';
+import { TestApi, AiApi } from 'apis';
+import { extension, aiPadKey, TESTCASES_APPLY_EVENT } from 'common/util';
 import styles from './TestPanel.module.scss';
 
 // LeetCode-style test cases for a code pad, docked under the editor
@@ -43,14 +43,38 @@ const toTextCase = tc => ({
 
 const blankCase = n => ({ name: `Case ${n}`, argsText: '[]', expectedText: 'null' });
 
+// The page's problem statement for the AI generator: the first
+// Readme (or other Markdown doc, LICENSE excluded), length-capped.
+function pageReadme(files) {
+  const docs = (files || []).filter(f => /\.md$/i.test(f.name) && !/license/i.test(f.name));
+  const readme = docs.find(f => /readme/i.test(f.name)) || docs[0];
+  return readme ? String(readme.content || '').slice(0, 8000) : '';
+}
+
 class TestPanel extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { pads: loadStore(), tab: 'case', running: false };
+    this.state = { pads: loadStore(), tab: 'case', running: false, generating: false, genError: '' };
   }
 
   componentDidUpdate(prevProps, prevState) {
     if (prevState.pads !== this.state.pads) saveStore(this.state.pads);
+  }
+
+  componentDidMount() {
+    // The AI Assistant can hand this pad a set of generated test
+    // cases (its third kind of result): they land here exactly like
+    // the panel's own Generate button output.
+    this.handleApplyCases = event => {
+      const detail = event.detail || {};
+      if (!detail.key || detail.key !== this.padKey()) return;
+      this.ingestCases(detail.entry, detail.cases);
+    };
+    window.addEventListener(TESTCASES_APPLY_EVENT, this.handleApplyCases);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener(TESTCASES_APPLY_EVENT, this.handleApplyCases);
   }
 
   // The file whose code is tested: the editing file when it is
@@ -120,13 +144,25 @@ class TestPanel extends React.Component {
     };
   }
 
-  updatePad(patch) {
+  updatePad(patch, callback) {
     const key = this.padKey();
     if (!key) return;
     const current = this.pad();
     this.setState(prev => ({
       pads: { ...prev.pads, [key]: { ...current, ...patch } },
-    }));
+    }), callback);
+  }
+
+  // The header tabs are the expand/collapse control (the old
+  // chevron button was too small to hit reliably): clicking a tab
+  // opens the panel on that tab; clicking the tab that is already
+  // showing collapses the panel again.
+  onTab(tab) {
+    const pad = this.pad();
+    if (!pad) return;
+    if (!pad.open) this.updatePad({ open: true });
+    else if (this.state.tab === tab) this.updatePad({ open: false });
+    this.setState({ tab });
   }
 
   updateCase(index, patch) {
@@ -153,13 +189,74 @@ class TestPanel extends React.Component {
     });
   }
 
+  // Drops a set of AI-generated cases into this pad's list -
+  // replacing it when it still holds only blank cases, appended
+  // after hand-written ones otherwise - then runs them against the
+  // current code. Shared by the Generate button below and by test
+  // cases handed over from the AI Assistant.
+  ingestCases(entry, cases) {
+    const pad = this.pad();
+    if (!pad || !Array.isArray(cases) || !cases.length) return;
+    const textCases = cases.map(toTextCase);
+    const blankOnly = pad.cases.every(tc => tc.argsText === '[]' && tc.expectedText === 'null');
+    const merged = blankOnly ? textCases : [...pad.cases, ...textCases];
+    this.updatePad({
+      entry: pad.entry.trim() ? pad.entry : (entry || ''),
+      cases: merged,
+      active: 0,
+      open: true,
+      results: null,
+      runError: '',
+    }, () => this.run());
+  }
+
+  // Ask the LLM (same configured endpoint as the AI Assistant, and
+  // the same per-user model pick) for a set of test cases - entry,
+  // args and expected included - and drop them straight into this
+  // pad's case list: replacing the list when it still holds only
+  // blank cases, appended after hand-written ones otherwise. The
+  // fresh cases are then run against the current code right away.
+  generate() {
+    const file = this.codeFile();
+    const pad = this.pad();
+    if (!file || !pad || this.state.generating) return;
+    this.setState({ generating: true, genError: '' });
+    let model;
+    try {
+      model = window.localStorage.getItem('av-ai-model-v1') || undefined;
+    } catch (error) {
+      model = undefined;
+    }
+    AiApi.generateTests({
+      language: extension(file.name),
+      code: file.content,
+      entry: pad.entry,
+      context: pageReadme(this.props.current.files),
+      model,
+      count: 6,
+    }).then(({ entry, cases }) => {
+      this.setState({ generating: false });
+      if (!cases || !cases.length) {
+        this.setState({ genError: 'The model returned no usable cases - try again.' });
+        return;
+      }
+      this.ingestCases(entry, cases);
+    }).catch(error => {
+      const data = error && error.response && error.response.data;
+      this.setState({
+        generating: false,
+        genError: (data && data.message) || 'Generation failed. Is the server running?',
+      });
+    });
+  }
+
   run() {
     const file = this.codeFile();
     const pad = this.pad();
     if (!file || !pad || this.state.running) return;
     const entry = pad.entry.trim();
     if (!entry) {
-      this.updatePad({ runError: 'Set the entry function/method name first (e.g. minOperations, or the method on class Solution).', results: null });
+      this.updatePad({ open: true, runError: 'Set the entry function/method name first (e.g. minOperations, or the method on class Solution).', results: null });
       this.setState({ tab: 'result' });
       return;
     }
@@ -172,19 +269,20 @@ class TestPanel extends React.Component {
         args = JSON.parse(tc.argsText);
         if (!Array.isArray(args)) throw new Error('not an array');
       } catch (error) {
-        this.updatePad({ runError: `${tc.name}: Args must be a JSON array, e.g. ["dog"] or [1, 2].`, results: null });
+        this.updatePad({ open: true, runError: `${tc.name}: Args must be a JSON array, e.g. ["dog"] or [1, 2].`, results: null });
         this.setState({ tab: 'result' });
         return;
       }
       try {
         expected = JSON.parse(tc.expectedText);
       } catch (error) {
-        this.updatePad({ runError: `${tc.name}: Expected must be valid JSON, e.g. 1 or "abc" or [1, 2].`, results: null });
+        this.updatePad({ open: true, runError: `${tc.name}: Expected must be valid JSON, e.g. 1 or "abc" or [1, 2].`, results: null });
         this.setState({ tab: 'result' });
         return;
       }
       cases.push({ name: tc.name, args, expected });
     }
+    this.updatePad({ open: true });
     this.setState({ running: true, tab: 'result' });
     TestApi.run({
       language: extension(file.name),
@@ -260,11 +358,13 @@ class TestPanel extends React.Component {
       <div className={styles.test_panel}>
         <div className={styles.header}>
           <button className={`${styles.tab} ${tab === 'case' ? styles.tab_active : ''}`}
-                  onClick={() => this.setState({ tab: 'case' })}>
+                  title={pad.open && tab === 'case' ? 'Click to collapse' : 'Click to expand'}
+                  onClick={() => this.onTab('case')}>
             ✓ Testcase
           </button>
           <button className={`${styles.tab} ${tab === 'result' ? styles.tab_active : ''}`}
-                  onClick={() => this.setState({ tab: 'result' })}>
+                  title={pad.open && tab === 'result' ? 'Click to collapse' : 'Click to expand'}
+                  onClick={() => this.onTab('result')}>
             &gt;_ Test Result
             {passedCount != null ? ` (${passedCount}/${pad.results.length})` : ''}
           </button>
@@ -273,9 +373,6 @@ class TestPanel extends React.Component {
           <button className={styles.run} disabled={!file || running} onClick={() => this.run()}>
             {running ? 'Running...' : 'Run'}
           </button>
-          <button className={styles.chevron} onClick={() => this.updatePad({ open: !pad.open })}>
-            {pad.open ? '▾' : '▸'}
-          </button>
         </div>
         {
           pad.open ? (
@@ -283,6 +380,16 @@ class TestPanel extends React.Component {
               {
                 tab === 'case' ? (
                   <div>
+                    <div className={styles.gen_row}>
+                      <button className={styles.gen_btn} disabled={!file || this.state.generating}
+                              onClick={() => this.generate()}>
+                        {this.state.generating ? 'Generating...' : 'Generate with AI'}
+                      </button>
+                      <span className={styles.hint}>
+                        AI writes cases (args + expected) for the current code, drops them in here and runs them.
+                      </span>
+                    </div>
+                    {this.state.genError ? <pre className={styles.error}>{this.state.genError}</pre> : null}
                     <div className={styles.chips}>
                       {
                         pad.cases.map((tc, i) => (

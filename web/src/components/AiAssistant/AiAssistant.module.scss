@@ -76,6 +76,42 @@
       opacity: .6;
     }
 
+    // A reply's test-case set (the third kind of AI result): the
+    // cases plus the apply-into-the-Testcase-panel action.
+    .cases_card {
+      margin-top: 8px;
+      padding: 8px;
+      background-color: $theme-normal;
+      border: 1px solid $color-border;
+      border-radius: 6px;
+
+      .cases_title {
+        opacity: .7;
+        margin-bottom: 6px;
+      }
+
+      .case_line {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        font-family: $font-family-monospace;
+        font-size: $font-size-normal;
+        white-space: nowrap;
+        overflow-x: auto;
+        line-height: 1.5;
+
+        .case_name {
+          font-family: inherit;
+          opacity: .85;
+          flex-shrink: 0;
+        }
+      }
+
+      .chip {
+        margin-top: 8px;
+      }
+    }
+
     .user_message {
       align-self: flex-end;
       max-width: 85%;

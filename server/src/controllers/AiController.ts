@@ -32,6 +32,7 @@ function systemPrompt(ext: string) {
     '- Keep the file\'s existing boilerplate and section markers (// import visualization libraries { ... // }, // define tracer variables { ... // }, // visualize { ... // }) and its overall structure; change only what the instruction needs.',
     '- When asked to visualize / add tracers: instrument the algorithm with the tracer API below, call delay after each meaningful step, set the root layout once, and keep the algorithm logic itself unchanged.',
     '- If the instruction only asks for an explanation, return the code unchanged and put the explanation in the explanation field.',
+    '- If the instruction asks for test cases (or supplying cases is the natural fulfilment of it), ALSO include "testCases": [{"name": "<short name>", "args": [<call arguments as JSON, in order>], "expected": <return value as JSON>}] and "entry": "<the function, or the method on class Solution, the cases call>". args/expected must be plain JSON values, and expected must be the value a CORRECT implementation returns - work each case out carefully. Still return the complete code as well (unchanged, unless the instruction also asked for code changes).',
     '- This is a continuing session for one code pad: earlier turns are included as conversation history. The file content in the latest user message is authoritative - the user may have hand-edited it, or accepted or rejected your earlier proposals.',
     '',
     tracerReference(ext),
@@ -97,17 +98,26 @@ function balancedJson(text: string, from: number): string | null {
   return null;
 }
 
-function asReply(parsed: any): { code: string, explanation: string } | null {
+function asReply(parsed: any): { code: string, explanation: string, testCases?: { name: string, args: any[], expected: any }[], entry?: string } | null {
   if (parsed && typeof parsed.code === 'string') {
-    return {
+    const reply: { code: string, explanation: string, testCases?: { name: string, args: any[], expected: any }[], entry?: string } = {
       code: stripFence(parsed.code),
       explanation: typeof parsed.explanation === 'string' ? parsed.explanation : '',
     };
+    // A reply may also carry a set of test cases (the third kind of
+    // AI result, next to code and plain explanation): the UI offers
+    // them as an apply-into-the-Testcase-panel action.
+    const testCases = validCases(parsed.testCases);
+    if (testCases) {
+      reply.testCases = testCases;
+      if (typeof parsed.entry === 'string' && parsed.entry.trim()) reply.entry = parsed.entry.trim();
+    }
+    return reply;
   }
   return null;
 }
 
-export function parseReply(content: string): { code: string, explanation: string } {
+export function parseReply(content: string): { code: string, explanation: string, testCases?: { name: string, args: any[], expected: any }[], entry?: string } {
   const trimmed = content.trim();
   // 1. JSON, wherever it lives: the whole reply, inside a fence, or
   // as a balanced {...} region surrounded by prose. Models keep
@@ -147,10 +157,158 @@ export function parseReply(content: string): { code: string, explanation: string
   return {code: fenced !== trimmed ? fenced : content, explanation: ''};
 }
 
+// One chat-completions call chain with the same patience policy as
+// the assistant (overload retries with backoff + Retry-After, one
+// timeout retry, automatic switch to LLM_MODEL_FALLBACK when the
+// primary stays overloaded). Used by the test-case generator; the
+// assistant keeps its own inline chain for now. Throws an Error
+// carrying .status (503 unconfigured / 502 upstream) and a composed
+// .message in the same style the assistant returns.
+async function callLlm(messages: object[], requestedModel: string | null): Promise<{ content: string, usedModel: string, totalAttempts: number }> {
+  const baseUrl = process.env.LLM_BASE_URL;
+  const apiKey = process.env['LLM_API' + '_KEY'];
+  const primaryModel = requestedModel || process.env.LLM_MODEL;
+  if (!baseUrl || !apiKey || !primaryModel) {
+    const error: any = new Error('The server has no LLM configured. Set LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in server/.env, then restart the server.');
+    error.status = 503;
+    throw error;
+  }
+  const timeoutMs = Number(process.env.LLM_TIMEOUT_MS) || 180000;
+  const FAST_DELAYS = [2000, 5000, 10000];
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  let totalAttempts = 0;
+  let usedModel: string = primaryModel;
+  const isRetryableFailure = (error: any) => {
+    const status = error && error.response && error.response.status;
+    return !!(error && ((error as any).llmTimeout || !status || status === 429 || status >= 500));
+  };
+  const callModel = async (modelName: string): Promise<string | null> => {
+    let fastRetries = 0;
+    let timeoutRetries = 0;
+    for (;;) {
+      totalAttempts += 1;
+      try {
+        const {data} = await axios.post(`${baseUrl!.replace(/\/$/, '')}/chat/completions`, {
+          model: modelName,
+          temperature: 0.2,
+          messages,
+        }, {
+          headers: {Authorization: `Bearer ${apiKey}`},
+          timeout: timeoutMs,
+        });
+        const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+        return typeof content === 'string' ? content : null;
+      } catch (error) {
+        const status = error && error.response && error.response.status;
+        const isTimeout = !!(error && (error.code === 'ECONNABORTED' || /timeout/i.test(String(error.message || ''))));
+        if (isTimeout) {
+          if (timeoutRetries >= 1) {
+            const timeoutError: any = new Error(`timed out after ${Math.round(timeoutMs / 1000)}s - the provider may be overloaded; try again, or use a lighter model`);
+            timeoutError.llmTimeout = true;
+            throw timeoutError;
+          }
+          timeoutRetries += 1;
+          await sleep(1000);
+        } else if (!status || status === 429 || status >= 500) {
+          if (fastRetries >= FAST_DELAYS.length) throw error;
+          const retryAfterSec = Number(error && error.response && error.response.headers && error.response.headers['retry-after']);
+          const retryAfterMs = isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec * 1000 : 0;
+          const delay = Math.min(30000, Math.max(FAST_DELAYS[fastRetries], retryAfterMs));
+          fastRetries += 1;
+          await sleep(delay);
+        } else {
+          throw error;
+        }
+      }
+    }
+  };
+  try {
+    let content: string | null;
+    try {
+      content = await callModel(primaryModel!);
+    } catch (error) {
+      const fallbackModel = process.env.LLM_MODEL_FALLBACK;
+      if (fallbackModel && fallbackModel !== primaryModel && isRetryableFailure(error)) {
+        usedModel = fallbackModel;
+        content = await callModel(fallbackModel);
+      } else {
+        throw error;
+      }
+    }
+    if (content === null) {
+      const error: any = new Error('The LLM returned an unrecognized response.');
+      error.status = 502;
+      throw error;
+    }
+    return {content, usedModel, totalAttempts};
+  } catch (error) {
+    const status = error && error.response && error.response.status;
+    const data = error && error.response && error.response.data;
+    const upstream = (data && data.error && data.error.message)
+      || (data && typeof data.message === 'string' && data.message)
+      || (status === 503 ? 'the provider reports the model is overloaded (503, high demand)' : null);
+    const hint = status === 404
+      ? ` - model "${usedModel}" was not found (404): the id is wrong or unavailable to this API key; Admin -> AI Call Log -> "List models my key can use" shows the exact ids`
+      : '';
+    const wrapped: any = new Error(`LLM call failed: ${upstream || (error && error.message) || 'unknown error'}${hint}${totalAttempts > 1 ? ` (after ${totalAttempts} attempts)` : ''}`);
+    wrapped.status = (error && error.status) || 502;
+    wrapped.totalAttempts = totalAttempts;
+    wrapped.usedModel = usedModel;
+    throw wrapped;
+  }
+}
+
+// Validates a raw cases array from a model reply: every case
+// needs an args array; names are defaulted, everything is capped.
+// Returns null when nothing usable remains.
+function validCases(raw: any): { name: string, args: any[], expected: any }[] | null {
+  if (!Array.isArray(raw)) return null;
+  const cases = raw
+    .filter((tc: any) => tc && Array.isArray(tc.args))
+    .slice(0, 12)
+    .map((tc: any, i: number) => ({
+      name: typeof tc.name === 'string' && tc.name.trim() ? tc.name.trim().slice(0, 60) : `Case ${i + 1}`,
+      args: tc.args,
+      expected: tc.expected === undefined ? null : tc.expected,
+    }));
+  return cases.length ? cases : null;
+}
+
+// Extracts and validates the generator's JSON payload from a model
+// reply (the JSON may sit inside fences or prose, like the
+// assistant's replies). Returns null when nothing usable is found.
+function parseGeneratedCases(content: string): { entry: string, cases: { name: string, args: any[], expected: any }[] } | null {
+  const candidates: string[] = [content.trim()];
+  const jsonFence = content.match(/```(?:json)?\s*\n([\s\S]*?)```/);
+  if (jsonFence) candidates.push(jsonFence[1]);
+  let searchFrom = 0;
+  for (let i = 0; i < 5; i += 1) {
+    const region = balancedJson(content, searchFrom);
+    if (!region) break;
+    candidates.push(region);
+    const next = content.indexOf('{', searchFrom + 1);
+    if (next < 0) break;
+    searchFrom = next;
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (!parsed) continue;
+      const cases = validCases(parsed.cases);
+      if (!cases) continue;
+      return {entry: typeof parsed.entry === 'string' ? parsed.entry.trim() : '', cases};
+    } catch (error) {
+      // try the next shape
+    }
+  }
+  return null;
+}
+
 export class AiController extends Controller {
   constructor(server: Server) {
     super(server);
     this.router.post('/assist', this.assist);
+    this.router.post('/generate-tests', this.generateTests);
     this.router.get('/models', this.models);
   }
 
@@ -170,6 +328,90 @@ export class AiController extends Controller {
     } catch (error) {
       const upstream = error && error.response && error.response.data && error.response.data.error && error.response.data.error.message;
       return res.status(502).json({message: `Listing models failed: ${upstream || (error && error.message) || 'unknown error'}`});
+    }
+  };
+
+  // AI test-case generation for the Testcase panel: the frontend
+  // sends the pad's current code (plus the problem statement when
+  // the page has one), and the model returns entry + cases with
+  // args and expected values as plain JSON, ready to drop into the
+  // panel's case list.
+  generateTests = async (req: express.Request, res: express.Response) => {
+    const {code, language, entry, context} = (req.body || {}) as any;
+    if (typeof code !== 'string' || !code.trim()) {
+      return res.status(400).json({message: 'Missing code in the request.'});
+    }
+    const countRaw = Number((req.body as any).count);
+    const count = isFinite(countRaw) ? Math.max(1, Math.min(12, Math.round(countRaw))) : 6;
+    const requestedModel = typeof (req.body as any).model === 'string' && (req.body as any).model.trim()
+      ? (req.body as any).model.trim().slice(0, 200)
+      : null;
+    const startedAt = Date.now();
+    const logCall = (partial: object) => appendAiCall({
+      ts: new Date().toISOString(),
+      status: 'ok',
+      model: requestedModel || process.env.LLM_MODEL || null,
+      attempts: 0,
+      language: String(language || 'js'),
+      instruction: 'generate-tests',
+      context: null,
+      history: [],
+      code,
+      rawResponse: null,
+      reply: null,
+      syntax: null,
+      error: null,
+      ...partial,
+      durationMs: Date.now() - startedAt,
+    } as any);
+    const messages: object[] = [
+      {
+        role: 'system',
+        content: [
+          'You generate test cases for a coding problem inside Algorithm Visualizer.',
+          'Reply with ONLY a JSON object - no prose, no markdown fences:',
+          '{"entry": "<name of the function, or of the method on class Solution, to call>", "cases": [{"name": "<short case name>", "args": [<the call arguments as JSON, in order>], "expected": <the return value as JSON>}]}',
+          'Rules:',
+          '- args and expected must be plain JSON values only (numbers, strings, booleans, null, arrays, objects): the runner passes args as JSON and compares the return value against expected as JSON.',
+          '- expected must be the value a CORRECT implementation returns for those args. Work every case out carefully - a wrong expected value is worse than no case.',
+          '- Cover, in order: the examples from the problem statement (when one is provided), then typical cases, then edge cases that fit this problem (empty or minimal input, a single element, duplicates, already-ordered and reverse-ordered input, zero / negative values, a larger input).',
+          '- Keep numbers exact; never use floating-point approximations.',
+          `- Generate exactly ${count} cases unless the problem genuinely supports fewer.`,
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: [
+          `Language: ${String(language || 'js')}`,
+          `Entry (if already known): ${typeof entry === 'string' && entry.trim() ? entry.trim() : '(infer it from the code)'}`,
+          '',
+          'Problem statement:',
+          typeof context === 'string' && context.trim() ? context.slice(0, 8000) : '(not provided - infer the problem from the code)',
+          '',
+          'Current code (the implementation under test - infer the entry signature and the semantics from it):',
+          code.slice(0, 20000),
+        ].join('\n'),
+      },
+    ];
+    try {
+      const {content, usedModel, totalAttempts} = await callLlm(messages, requestedModel);
+      const parsed = parseGeneratedCases(content);
+      if (!parsed) {
+        logCall({status: 'error', model: usedModel, attempts: totalAttempts, rawResponse: content, error: 'The model did not return usable test cases.'});
+        return res.status(502).json({message: 'The model did not return usable test cases - try again, or pick a different model in the AI Assistant.'});
+      }
+      const finalEntry = parsed.entry || (typeof entry === 'string' ? entry.trim() : '');
+      logCall({model: usedModel, attempts: totalAttempts, rawResponse: content, reply: {entry: finalEntry, cases: parsed.cases} as any});
+      return res.json({entry: finalEntry, cases: parsed.cases, model: usedModel});
+    } catch (error) {
+      const status = (error as any).status || 502;
+      logCall({
+        status: status === 503 ? 'not_configured' : 'error',
+        model: (error as any).usedModel || requestedModel || process.env.LLM_MODEL || null,
+        attempts: (error as any).totalAttempts || 0,
+        error: (error as Error).message,
+      });
+      return res.status(status).json({message: (error as Error).message});
     }
   };
 

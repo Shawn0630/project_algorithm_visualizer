@@ -49,6 +49,11 @@ const aiPadKey = (current, fileName) => {
 
 const AI_SESSION_DELETE_EVENT = 'av-ai-session-delete';
 
+// The AI Assistant hands a set of generated test cases to the
+// Testcase panel of the same pad: detail = {key, entry, cases},
+// where key is the pad key (aiPadKey) the cases belong to.
+const TESTCASES_APPLY_EVENT = 'av-testcases-apply';
+
 const notifyAiSessionDeleted = (current, fileName) => {
   window.dispatchEvent(new CustomEvent(AI_SESSION_DELETE_EVENT, { detail: aiPadKey(current, fileName) }));
 };
@@ -64,5 +69,6 @@ export {
   isSaved,
   aiPadKey,
   AI_SESSION_DELETE_EVENT,
+  TESTCASES_APPLY_EVENT,
   notifyAiSessionDeleted,
 };

@@ -50,6 +50,7 @@ const PATCH = URL => {
 const AiApi = {
   assist: POST('/ai/assist'),
   models: GET('/ai/models'),
+  generateTests: POST('/ai/generate-tests'),
 };
 
 const TestApi = {
