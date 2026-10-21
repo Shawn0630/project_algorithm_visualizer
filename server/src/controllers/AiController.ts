@@ -107,6 +107,17 @@ export class AiController extends Controller {
           : '',
       ].filter(Boolean).join(' ')
       : '';
+    // The page's Markdown document (problem statement), when the
+    // frontend sends one: a separate context message, length-capped.
+    const readme = context && typeof context === 'object' && context.readme && typeof context.readme === 'object'
+      ? {
+        name: String(context.readme.name || 'README.md'),
+        content: String(context.readme.content || '').slice(0, 12000),
+      }
+      : null;
+    const readmeNote = readme && readme.content.trim()
+      ? `Page document (${readme.name}) - the problem statement / description for this page. Treat it as context for what the code on this page is supposed to do:\n\n${readme.content}`
+      : '';
     const baseUrl = process.env.LLM_BASE_URL;
     const apiKey = process.env['LLM_API' + '_KEY'];
     const model = process.env.LLM_MODEL;
@@ -149,6 +160,7 @@ export class AiController extends Controller {
       const messages: object[] = [
         {role: 'system', content: systemPrompt(String(language || 'js'))},
         ...(contextNote ? [{role: 'system', content: contextNote}] : []),
+        ...(readmeNote ? [{role: 'system', content: readmeNote}] : []),
         ...turns,
         {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`},
       ];

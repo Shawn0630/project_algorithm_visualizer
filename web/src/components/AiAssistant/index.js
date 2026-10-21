@@ -172,6 +172,16 @@ class AiAssistant extends React.Component {
         title: (titles || []).join(' / '),
         fileName: editingFile.name,
         files: (files || []).map(file => file.name),
+        // The page's Markdown document (e.g. a LeetCode problem's
+        // Readme.md) rides along as context, so the AI knows the
+        // problem statement behind the code it is asked to work on.
+        readme: (() => {
+          const mdFiles = (files || []).filter(file => extension(file.name) === 'md');
+          return mdFiles.length ? {
+            name: mdFiles.map(file => file.name).join(', '),
+            content: mdFiles.map(file => file.content).join('\n\n'),
+          } : undefined;
+        })(),
       },
     }).then(({ code, explanation, changed, syntax, partialSuspected }) => {
       this.setState({ busy: false });
