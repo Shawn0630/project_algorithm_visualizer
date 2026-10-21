@@ -1,5 +1,6 @@
 export { AdminController } from './AdminController';
 export { AiController } from './AiController';
+export { CodeCacheController } from './CodeCacheController';
 export { AlgorithmsController } from './AlgorithmsController';
 export { AuthController } from './AuthController';
 export { TestController } from './TestController';

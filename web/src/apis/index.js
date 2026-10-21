@@ -56,6 +56,12 @@ const TestApi = {
   run: POST('/tests/run'),
 };
 
+const CodeCacheApi = {
+  list: GET('/code-cache'),
+  put: PUT('/code-cache'),
+  remove: DELETE('/code-cache'),
+};
+
 const AlgorithmApi = {
   getCategories: GET('/algorithms'),
   getAlgorithm: GET('/algorithms/:categoryKey/:algorithmKey'),
@@ -117,6 +123,7 @@ const TracerApi = {
 export {
   AiApi,
   TestApi,
+  CodeCacheApi,
   AlgorithmApi,
   VisualizationApi,
   GitHubApi,

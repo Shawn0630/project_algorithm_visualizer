@@ -18,6 +18,7 @@ import {
 import { AlgorithmApi, GitHubApi, VisualizationApi } from 'apis';
 import { actions } from 'reducers';
 import { createUserFile, extension, refineGist } from 'common/util';
+import { hydrateCodeCache } from 'common/savedCode';
 import { exts, languages } from 'common/config';
 import { LICENSE_MD, SCRATCH_PAPER_README_MD } from 'files';
 import styles from './App.module.scss';
@@ -45,7 +46,9 @@ class App extends BaseComponent {
 
     const { params } = this.props.match;
     const { search } = this.props.location;
-    this.loadAlgorithm(params, queryString.parse(search));
+    // Merge the server-side code cache into the local one first, so
+    // the first page load already overlays the user's own code.
+    hydrateCodeCache().then(() => this.loadAlgorithm(params, queryString.parse(search)));
 
     const accessToken = Cookies.get('access_token');
     if (accessToken) this.signIn(accessToken);
