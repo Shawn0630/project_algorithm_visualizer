@@ -31,12 +31,32 @@ function systemPrompt(ext: string) {
     '- NEVER elide anything: no "// ...", no "# ... rest unchanged", no 其余代码不变 / 保持不变 / 同上， no placeholders of any kind. Regions you do not change must be reproduced character-for-character, however long the file is.',
     '- Keep the file\'s existing boilerplate and section markers (// import visualization libraries { ... // }, // define tracer variables { ... // }, // visualize { ... // }) and its overall structure; change only what the instruction needs.',
     '- When asked to visualize / add tracers: instrument the algorithm with the tracer API below, call delay after each meaningful step, set the root layout once, and keep the algorithm logic itself unchanged.',
+    '- The ONLY visualization library is algorithm_visualizer, exactly as documented below. There is no py_viz module and there are no set_variables / mark_line methods - never invent imports or tracer methods. If the file only defines a class or functions (e.g. class Solution), append a driver section that creates the tracers and actually calls the code, or nothing will visualize.',
     '- If the instruction only asks for an explanation, return the code unchanged and put the explanation in the explanation field.',
     '- If the instruction asks for test cases (or supplying cases is the natural fulfilment of it), ALSO include "testCases": [{"name": "<short name>", "args": [<call arguments as JSON, in order>], "expected": <return value as JSON>}] and "entry": "<the function, or the method on class Solution, the cases call>". args/expected must be plain JSON values, and expected must be the value a CORRECT implementation returns - work each case out carefully. Still return the complete code as well (unchanged, unless the instruction also asked for code changes).',
     '- This is a continuing session for one code pad: earlier turns are included as conversation history. The file content in the latest user message is authoritative - the user may have hand-edited it, or accepted or rejected your earlier proposals.',
     '',
     tracerReference(ext),
   ].join('\n');
+}
+
+// Detects a "hallucinated library" reply: models occasionally
+// invent a visualization module (py_viz) or tracer methods
+// (set_variables, mark_line) that do not exist in this app, and the
+// resulting code can never run. Returns a label for what was
+// invented, or null when the code sticks to the real API.
+const HALLUCINATED_LIB_PATTERNS: [RegExp, string][] = [
+  [/py_viz/, 'the non-existent module "py_viz"'],
+  [/\.set_variables\s*\(/, 'the invented tracer method "set_variables"'],
+  [/\.mark_line\s*\(/, 'the invented tracer method "mark_line"'],
+  [/\bimport\s+visualizer\b|\bfrom\s+visualizer\s+import/, 'the non-existent module "visualizer" (the real one is "algorithm_visualizer")'],
+];
+
+export function findHallucinatedLib(code: string): string | null {
+  for (const [pattern, label] of HALLUCINATED_LIB_PATTERNS) {
+    if (pattern.test(code)) return label;
+  }
+  return null;
 }
 
 // Detects a "lazy" reply: the model was told to return the complete
@@ -305,11 +325,47 @@ function parseGeneratedCases(content: string): { entry: string, cases: { name: s
   return null;
 }
 
-export class AiController extends Controller {
-  constructor(server: Server) {
+// Parses one test-chat reply: a JSON object with a message, and -
+// when the reply changes the case list - a mode ("append" = cases
+// holds only new ones, "replace" = cases holds the complete
+// revised list) plus the cases themselves. Returns null when the
+// reply carries no usable JSON message (the handler then delivers
+// the raw text as a plain message with no case change).
+function parseTestChatReply(content: string): { message: string, entry: string, mode: 'append' | 'replace', cases: { name: string, args: any[], expected: any }[] | null } | null {
+  const candidates: string[] = [content.trim()];
+  const jsonFence = content.match(/```(?:json)?\s*\n([\s\S]*?)```/);
+  if (jsonFence) candidates.push(jsonFence[1]);
+  let searchFrom = 0;
+  for (let i = 0; i < 5; i += 1) {
+    const region = balancedJson(content, searchFrom);
+    if (!region) break;
+    candidates.push(region);
+    const next = content.indexOf('{', searchFrom + 1);
+    if (next < 0) break;
+    searchFrom = next;
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (!parsed || typeof parsed.message !== 'string' || !parsed.message.trim()) continue;
+      return {
+        message: parsed.message.trim().slice(0, 8000),
+        entry: typeof parsed.entry === 'string' ? parsed.entry.trim() : '',
+        mode: parsed.mode === 'replace' ? 'replace' : 'append',
+        cases: validCases(parsed.cases),
+      };
+    } catch (error) {
+      // try the next shape
+    }
+  }
+  return null;
+}
+
+export class AiController extends Controller {  constructor(server: Server) {
     super(server);
     this.router.post('/assist', this.assist);
     this.router.post('/generate-tests', this.generateTests);
+    this.router.post('/test-chat', this.testChat);
     this.router.get('/models', this.models);
   }
 
@@ -413,6 +469,111 @@ export class AiController extends Controller {
         error: (error as Error).message,
       });
       return res.status(status).json({message: (error as Error).message});
+    }
+  };
+
+  // One turn of the Testcase panel's dedicated test-case
+  // generation session: a conversation scoped to generating and
+  // refining THIS pad's cases, where the user can follow up
+  // ("add an empty-string case", "make case 2 harder", "drop the
+  // duplicate"). The client sends the pad's code, the problem
+  // statement, the CURRENT case list and the chat history every
+  // turn, so follow-ups always operate on the real list. The model
+  // answers with a JSON object: a message, plus - when it changes
+  // the cases - either mode "append" with only the new cases, or
+  // mode "replace" with the complete revised list. A reply that
+  // does not parse as that JSON is still delivered as a plain
+  // message with no case change.
+  testChat = async (req: express.Request, res: express.Response) => {
+    const { code, language, entry, context, instruction, currentCases } = (req.body || {}) as any;
+    if (typeof code !== 'string' || !code.trim()) {
+      return res.status(400).json({ message: 'Missing code in the request.' });
+    }
+    if (typeof instruction !== 'string' || !instruction.trim()) {
+      return res.status(400).json({ message: 'Missing instruction in the request.' });
+    }
+    const turns: { role: string, content: string }[] = Array.isArray((req.body as any).history)
+      ? (req.body as any).history
+        .filter((turn: any) => turn && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string')
+        .slice(-20)
+        .map((turn: any) => ({ role: turn.role, content: turn.content.slice(0, 8000) }))
+      : [];
+    const requestedModel = typeof (req.body as any).model === 'string' && (req.body as any).model.trim()
+      ? (req.body as any).model.trim().slice(0, 200)
+      : null;
+    const startedAt = Date.now();
+    const logCall = (partial: object) => appendAiCall({
+      ts: new Date().toISOString(),
+      status: 'ok',
+      model: requestedModel || process.env.LLM_MODEL || null,
+      attempts: 0,
+      language: String(language || 'js'),
+      instruction: 'test-chat',
+      context: null,
+      history: turns,
+      code,
+      rawResponse: null,
+      reply: null,
+      syntax: null,
+      error: null,
+      ...partial,
+      durationMs: Date.now() - startedAt,
+    } as any);
+    const currentList = Array.isArray(currentCases) && currentCases.length
+      ? JSON.stringify(currentCases.slice(0, 50), null, 1).slice(0, 12000)
+      : '(the case list is currently empty)';
+    const messages: object[] = [
+      {
+        role: 'system',
+        content: [
+          'You are the dedicated test-case generation session for one coding problem inside Algorithm Visualizer. Your ONLY job is this pad\'s test cases: generating them, adding to them, refining them, and answering questions about them.',
+          'Reply with ONLY a JSON object - no prose outside it, no markdown fences:',
+          '{"message": "<your reply to the user, in the language the user writes in>", "entry": "<entry name - include when you state or change it>", "mode": "append" | "replace", "cases": [{"name": "...", "args": [...], "expected": ...}]}',
+          'Rules:',
+          '- Include "cases" ONLY when you are changing the case list in this reply. For a pure question or explanation, omit "cases" (and "mode").',
+          '- mode "append": the user asked to ADD cases - "cases" holds ONLY the new ones.',
+          '- mode "replace": the user asked to change, fix or remove existing cases - "cases" holds the COMPLETE revised list.',
+          '- args and expected must be plain JSON values only (numbers, strings, booleans, null, arrays, objects): the runner passes args as JSON and compares the return value against expected as JSON.',
+          '- expected must be the value a CORRECT implementation returns for those args. Work every case out carefully - a wrong expected value is worse than no case.',
+          '- Keep numbers exact; never use floating-point approximations.',
+          '- The current case list is given in the first user message and is the source of truth for what exists; refer to cases by their names when you talk about them.',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: [
+          `Language: ${String(language || 'js')}`,
+          `Entry (if already known): ${typeof entry === 'string' && entry.trim() ? entry.trim() : '(infer it from the code)'}`,
+          '',
+          'Problem statement:',
+          typeof context === 'string' && context.trim() ? context.slice(0, 8000) : '(not provided - infer the problem from the code)',
+          '',
+          'Current code (the implementation under test):',
+          code.slice(0, 20000),
+          '',
+          'Current test cases (JSON):',
+          currentList,
+        ].join('\n'),
+      },
+      ...turns,
+      { role: 'user', content: instruction.trim().slice(0, 8000) },
+    ];
+    try {
+      const { content, usedModel, totalAttempts } = await callLlm(messages, requestedModel);
+      const parsed = parseTestChatReply(content);
+      const reply = parsed || { message: stripFence(content).trim() || '(empty reply)', entry: '', mode: 'append' as const, cases: null };
+      const finalEntry = reply.entry || (typeof entry === 'string' ? entry.trim() : '');
+      logCall({ model: usedModel, attempts: totalAttempts, rawResponse: content, reply: { ...reply, entry: finalEntry } as any });
+      return res.json({ message: reply.message, entry: finalEntry, mode: reply.mode, cases: reply.cases, model: usedModel });
+    } catch (error) {
+      const status = (error as any).status || 502;
+      logCall({
+        status: status === 503 ? 'not_configured' : 'error',
+        model: (error as any).usedModel || requestedModel || process.env.LLM_MODEL || null,
+        attempts: (error as any).totalAttempts || 0,
+        error: (error as Error).message,
+      });
+      return res.status(status).json({ message: (error as Error).message });
     }
   };
 
@@ -590,6 +751,35 @@ export class AiController extends Controller {
         }
       }
       const changed = reply.code !== code;
+      // Hallucinated-library guard: if the proposal imports or
+      // calls a visualization API that does not exist in this app
+      // (py_viz, set_variables, mark_line, ...), demand a rewrite
+      // against the real algorithm_visualizer API once. If it
+      // persists, flag it on the explanation rather than handing
+      // over code that can never run without a word.
+      let hallucinatedLib = changed ? findHallucinatedLib(reply.code) : null;
+      if (hallucinatedLib) {
+        const retryContent = await callModel([
+          ...messages,
+          {role: 'assistant', content},
+          {
+            role: 'user',
+            content: `Your previous reply used ${hallucinatedLib}, which does not exist in this app. The ONLY visualization library is algorithm_visualizer, with exactly the API in the reference - and if the file only defines a class or functions, you must append a driver section that creates the tracers, sets the layout root and calls the code. Rewrite the COMPLETE file using only the real API. Reply with the same JSON format only.`,
+          },
+        ], usedModel || primaryModel!);
+        if (retryContent !== null) {
+          const retryReply = parseReply(retryContent);
+          content = retryContent;
+          reply = retryReply;
+          hallucinatedLib = findHallucinatedLib(reply.code);
+        }
+        if (hallucinatedLib) {
+          reply = {
+            ...reply,
+            explanation: `Warning: the model used ${hallucinatedLib}, which does not exist in this app - this code will not run as-is. ${reply.explanation}`,
+          };
+        }
+      }
       // Check the proposal compiles before the user is asked to review
       // it; a broken proposal is labelled, not silently handed over.
       const syntax = changed ? await checkSyntax(String(language || 'js'), reply.code) : null;

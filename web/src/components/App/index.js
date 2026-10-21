@@ -18,6 +18,7 @@ import {
 import { AlgorithmApi, GitHubApi, VisualizationApi } from 'apis';
 import { actions } from 'reducers';
 import { createUserFile, extension, refineGist } from 'common/util';
+import { loadLayoutStore, saveLayoutStore } from 'common/layouts';
 import { hydrateCodeCache } from 'common/savedCode';
 import { exts, languages } from 'common/config';
 import { LICENSE_MD, SCRATCH_PAPER_README_MD } from 'files';
@@ -27,9 +28,14 @@ class App extends BaseComponent {
   constructor(props) {
     super(props);
 
+    // The workspace arrangement (pane visibility + widths) is a
+    // layout: restored from the last session when one was saved,
+    // with the built-in Default as the starting point.
+    const layoutStore = loadLayoutStore();
     this.state = {
-      workspaceVisibles: [true, true, true, false],
-      workspaceWeights: [1, 2, 2, 1.4],
+      workspaceVisibles: layoutStore.current ? [...layoutStore.current.visibles] : [true, true, true, false],
+      workspaceWeights: layoutStore.current ? [...layoutStore.current.weights] : [1, 2, 2, 1.4],
+      customLayouts: layoutStore.custom,
     };
 
     this.codeEditorRef = React.createRef();
@@ -221,20 +227,57 @@ class App extends BaseComponent {
   }
 
   handleChangeWorkspaceWeights(workspaceWeights) {
-    this.setState({ workspaceWeights });
-    this.codeEditorRef.current.handleResize();
+    this.setState({ workspaceWeights }, () => {
+      this.codeEditorRef.current.handleResize();
+      this.persistLayout();
+    });
+  }
+
+  // Layouts: presets and user-saved arrangements of the four
+  // workspace panes. Every change persists the current arrangement
+  // so a reload comes back exactly as the user left it.
+  persistLayout() {
+    const { workspaceVisibles, workspaceWeights, customLayouts } = this.state;
+    saveLayoutStore({
+      custom: customLayouts,
+      current: { name: 'Current', visibles: workspaceVisibles, weights: workspaceWeights },
+    });
+  }
+
+  applyLayout(layout) {
+    this.setState({
+      workspaceVisibles: [...layout.visibles],
+      workspaceWeights: [...layout.weights],
+    }, () => {
+      if (this.codeEditorRef.current) this.codeEditorRef.current.handleResize();
+      this.persistLayout();
+    });
+  }
+
+  saveCustomLayout(name) {
+    const { workspaceVisibles, workspaceWeights, customLayouts } = this.state;
+    const entry = { name, visibles: [...workspaceVisibles], weights: [...workspaceWeights] };
+    this.setState({
+      customLayouts: [...customLayouts.filter(layout => layout.name !== name), entry],
+    }, () => this.persistLayout());
+  }
+
+  deleteCustomLayout(name) {
+    this.setState(prev => ({
+      customLayouts: prev.customLayouts.filter(layout => layout.name !== name),
+    }), () => this.persistLayout());
   }
 
   toggleNavigatorOpened(navigatorOpened = !this.state.workspaceVisibles[0]) {
     const workspaceVisibles = [...this.state.workspaceVisibles];
     workspaceVisibles[0] = navigatorOpened;
-    this.setState({ workspaceVisibles });
+    this.setState({ workspaceVisibles }, () => this.persistLayout());
   }
 
   toggleAiPanelOpened(aiPanelOpened = !this.state.workspaceVisibles[3]) {
     const workspaceVisibles = [...this.state.workspaceVisibles];
     workspaceVisibles[3] = aiPanelOpened;
-    this.setState({ workspaceVisibles });
+    this.setState({ workspaceVisibles }, () => this.persistLayout());
   }
 
   handleClickTitleBar() {
@@ -242,7 +285,7 @@ class App extends BaseComponent {
   }
 
   render() {
-    const { workspaceVisibles, workspaceWeights } = this.state;
+    const { workspaceVisibles, workspaceWeights, customLayouts } = this.state;
     const { titles, description, saved } = this.props.current;
 
     const title = `${saved ? '' : '(Unsaved) '}${titles.join(' - ')}`;
@@ -258,6 +301,11 @@ class App extends BaseComponent {
         <Header className={styles.header} onClickTitleBar={this.handleClickTitleBar}
                 navigatorOpened={navigatorOpened} loadScratchPapers={this.loadScratchPapers}
                 aiPanelOpened={aiPanelOpened} onToggleAiPanel={() => this.toggleAiPanelOpened()}
+                currentLayout={{ visibles: workspaceVisibles, weights: workspaceWeights }}
+                customLayouts={customLayouts}
+                onApplyLayout={layout => this.applyLayout(layout)}
+                onSaveLayout={name => this.saveCustomLayout(name)}
+                onDeleteLayout={name => this.deleteCustomLayout(name)}
                 ignoreHistoryBlock={this.ignoreHistoryBlock}/>
         <ResizableContainer className={styles.workspace} horizontal weights={workspaceWeights}
                             visibles={workspaceVisibles} onChangeWeights={this.handleChangeWorkspaceWeights}>

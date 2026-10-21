@@ -51,6 +51,13 @@ const AiApi = {
   assist: POST('/ai/assist'),
   models: GET('/ai/models'),
   generateTests: POST('/ai/generate-tests'),
+  testChat: POST('/ai/test-chat'),
+};
+
+const PadTestsApi = {
+  list: GET('/pad-tests'),
+  put: PUT('/pad-tests'),
+  remove: DELETE('/pad-tests'),
 };
 
 const TestApi = {
@@ -123,6 +130,7 @@ const TracerApi = {
 
 export {
   AiApi,
+  PadTestsApi,
   TestApi,
   CodeCacheApi,
   AlgorithmApi,

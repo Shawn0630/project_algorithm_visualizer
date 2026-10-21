@@ -68,6 +68,11 @@ export function getDb(): any {
       content TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS pad_tests (
+      pad_key TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
       value TEXT
@@ -333,6 +338,71 @@ export function putPadCode(key: string, content: string, ts?: number): void {
 
 export function deletePadCode(key: string): void {
   getDb().prepare('DELETE FROM pad_code WHERE pad_key = ?').run(key);
+}
+
+// ---------- Per-pad test cases + test-case generation chat ----------
+//
+// One record per code pad (same pad keys as pad_code): the panel's
+// entry + case list (in the panel's text form, so in-progress edits
+// survive verbatim) and the dedicated test-case generation chat
+// history for that pad. The browser keeps a localStorage copy as a
+// hot cache and syncs with this store, so cases and chats follow
+// the user across browsers and machines, and ride along with the
+// database when it is moved (Docker volume included).
+
+export interface PadTestRecord {
+  entry: string,
+  cases: any[],
+  chat: any[],
+  seededFrom: string | null,
+  ts: number,
+}
+
+const PAD_TEST_DEFAULTS = {entry: '', cases: [] as any[], chat: [] as any[], seededFrom: null as string | null};
+
+export function listPadTests(): { [key: string]: PadTestRecord } {
+  const rows = getDb().prepare('SELECT pad_key, data, updated_at FROM pad_tests').all();
+  const entries: { [key: string]: PadTestRecord } = {};
+  for (const row of rows) {
+    try {
+      const parsed = JSON.parse(row.data);
+      entries[row.pad_key] = {...PAD_TEST_DEFAULTS, ...parsed, ts: row.updated_at};
+    } catch (error) {
+      // A corrupt row is skipped rather than breaking the whole list.
+    }
+  }
+  return entries;
+}
+
+export function putPadTests(key: string, patch: Partial<PadTestRecord>): PadTestRecord {
+  const database = getDb();
+  const row = database.prepare('SELECT data FROM pad_tests WHERE pad_key = ?').get(key);
+  let current: any = {...PAD_TEST_DEFAULTS};
+  if (row) {
+    try {
+      current = {...PAD_TEST_DEFAULTS, ...JSON.parse(row.data)};
+    } catch (error) {
+      // Start from defaults if the stored record is unreadable.
+    }
+  }
+  const merged = {...current};
+  if (typeof patch.entry === 'string') merged.entry = patch.entry;
+  if (Array.isArray(patch.cases)) merged.cases = patch.cases;
+  if (Array.isArray(patch.chat)) merged.chat = patch.chat;
+  if (patch.seededFrom === null || typeof patch.seededFrom === 'string') merged.seededFrom = patch.seededFrom;
+  const ts = Date.now();
+  database.prepare('INSERT INTO pad_tests (pad_key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(pad_key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
+    .run(key, JSON.stringify(merged), ts);
+  const count = database.prepare('SELECT COUNT(*) AS count FROM pad_tests').get();
+  if (count && count.count > MAX_PAD_ENTRIES) {
+    database.prepare('DELETE FROM pad_tests WHERE pad_key IN (SELECT pad_key FROM pad_tests ORDER BY updated_at ASC LIMIT ?)')
+      .run(count.count - MAX_PAD_ENTRIES);
+  }
+  return {...merged, ts};
+}
+
+export function deletePadTests(key: string): void {
+  getDb().prepare('DELETE FROM pad_tests WHERE pad_key = ?').run(key);
 }
 
 // One-time import of the old file-based cache (server/data/

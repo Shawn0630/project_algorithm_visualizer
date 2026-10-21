@@ -20,7 +20,7 @@ import faFacebook from '@fortawesome/fontawesome-free-brands/faFacebook';
 import { GitHubApi } from 'apis';
 import { classes, refineGist } from 'common/util';
 import { actions } from 'reducers';
-import { BaseComponent, Button, Ellipsis, ListItem, Player } from 'components';
+import { BaseComponent, Button, Ellipsis, LayoutsMenu, ListItem, Player } from 'components';
 import styles from './Header.module.scss';
 
 class Header extends BaseComponent {
@@ -144,6 +144,9 @@ class Header extends BaseComponent {
             } */}
             {/* <Button icon={faFacebook} primary
                     href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`}>Share</Button> */}
+            <LayoutsMenu currentLayout={this.props.currentLayout} customLayouts={this.props.customLayouts}
+                         onApplyLayout={this.props.onApplyLayout} onSaveLayout={this.props.onSaveLayout}
+                         onDeleteLayout={this.props.onDeleteLayout}/>
             <Button icon={faComments} primary selected={this.props.aiPanelOpened}
                     onClick={() => this.props.onToggleAiPanel && this.props.onToggleAiPanel()}>AI Assistant</Button>
             <Button icon={faBook} primary to="/license">License</Button>

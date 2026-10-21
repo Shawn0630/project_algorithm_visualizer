@@ -65,7 +65,7 @@ export class JavaTracer extends Tracer {
         .then(() => new Promise((resolve, reject) => {
           const visualizationPath = path.resolve(tempPath, 'visualization.json');
           res.sendFile(visualizationPath, (err: any) => {
-            if (err) return reject(new Error('Visualization Not Found'));
+            if (err) return reject(new Error('The code ran without errors but produced no visualization - nothing called the tracers. Make sure the code creates tracers, sets the layout root once (Layout.setRoot / Layout::setRoot) and calls delay() as it runs.'));
             resolve();
           });
         }))

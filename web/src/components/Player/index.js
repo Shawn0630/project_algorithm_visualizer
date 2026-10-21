@@ -7,7 +7,7 @@ import faChevronLeft from '@fortawesome/fontawesome-free-solid/faChevronLeft';
 import faChevronRight from '@fortawesome/fontawesome-free-solid/faChevronRight';
 import faPause from '@fortawesome/fontawesome-free-solid/faPause';
 import faWrench from '@fortawesome/fontawesome-free-solid/faWrench';
-import { classes, extension } from 'common/util';
+import { classes, extension, VISUALIZE_CASE_EVENT } from 'common/util';
 import { TracerApi } from 'apis';
 import { actions } from 'reducers';
 import { BaseComponent, Button, ProgressBar } from 'components';
@@ -41,6 +41,21 @@ class Player extends BaseComponent {
   componentDidMount() {
     const { editingFile, shouldBuild } = this.props.current;
     if (shouldBuild) this.build(editingFile);
+    // The Testcase panel's Visualize action hands over a wrapped
+    // source (pad code + a harness for one case): build it like a
+    // pad build, then play it.
+    this.handleVisualizeCase = event => {
+      const detail = (event && event.detail) || {};
+      if (typeof detail.code === 'string') {
+        this.runBuild(detail.code, extension(detail.name || ''), true);
+      }
+    };
+    window.addEventListener(VISUALIZE_CASE_EVENT, this.handleVisualizeCase);
+  }
+
+  componentWillUnmount() {
+    if (this.handleVisualizeCase) window.removeEventListener(VISUALIZE_CASE_EVENT, this.handleVisualizeCase);
+    this.pause();
   }
 
   componentWillReceiveProps(nextProps) {
@@ -76,22 +91,32 @@ class Player extends BaseComponent {
   }
 
   build(file) {
+    if (!file) {
+      this.reset();
+      this.props.setBuildError(null);
+      return;
+    }
+    this.runBuild(file.content, extension(file.name), false);
+  }
+
+  // Shared build path: the pad's own Build (autoplay off) and the
+  // Testcase panel's case visualizations (autoplay on).
+  runBuild(code, ext, autoplay) {
     this.reset();
     this.props.setBuildError(null);
-    if (!file) return;
 
     if (this.tracerApiSource) this.tracerApiSource.cancel();
     this.tracerApiSource = axios.CancelToken.source();
     this.setState({ building: true });
 
-    const ext = extension(file.name);
     if (ext in TracerApi) {
-      TracerApi[ext]({ code: file.content }, undefined, this.tracerApiSource.token)
+      TracerApi[ext]({ code }, undefined, this.tracerApiSource.token)
         .then(commands => {
           this.tracerApiSource = null;
           this.setState({ building: false });
           this.reset(commands);
-          this.next();
+          if (autoplay) this.resume(true);
+          else this.next();
         })
         .catch(error => {
           if (axios.isCancel(error)) return;

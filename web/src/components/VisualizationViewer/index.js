@@ -5,7 +5,7 @@ import { actions } from 'reducers';
 import styles from './VisualizationViewer.module.scss';
 import * as TracerClasses from 'core/tracers';
 import * as LayoutClasses from 'core/layouts';
-import { classes, extension } from 'common/util';
+import { classes, extension, VISUALIZE_CASE_EVENT } from 'common/util';
 import { TracerApi } from 'apis';
 
 class VisualizationViewer extends BaseComponent {
@@ -51,6 +51,14 @@ class VisualizationViewer extends BaseComponent {
   componentDidMount() {
     const { chunks, cursor } = this.props.player;
     this.update(chunks, cursor);
+    // A case visualization should be seen: leave Markdown-doc mode
+    // so the playback shows (the Player loads the chunks itself).
+    this.handleVisualizeCase = () => this.showVisualization();
+    window.addEventListener(VISUALIZE_CASE_EVENT, this.handleVisualizeCase);
+  }
+
+  componentWillUnmount() {
+    if (this.handleVisualizeCase) window.removeEventListener(VISUALIZE_CASE_EVENT, this.handleVisualizeCase);
   }
 
   componentWillReceiveProps(nextProps) {

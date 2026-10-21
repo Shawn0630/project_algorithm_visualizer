@@ -54,6 +54,12 @@ const AI_SESSION_DELETE_EVENT = 'av-ai-session-delete';
 // where key is the pad key (aiPadKey) the cases belong to.
 const TESTCASES_APPLY_EVENT = 'av-testcases-apply';
 
+// The Testcase panel asks the Player to build and play a wrapped
+// source (the pad's code plus a generated harness calling the entry
+// with one case's args): detail = {code, name}. The visualization
+// viewer also listens, to leave Markdown-doc mode for the playback.
+const VISUALIZE_CASE_EVENT = 'av-visualize-case';
+
 const notifyAiSessionDeleted = (current, fileName) => {
   window.dispatchEvent(new CustomEvent(AI_SESSION_DELETE_EVENT, { detail: aiPadKey(current, fileName) }));
 };
@@ -70,5 +76,6 @@ export {
   aiPadKey,
   AI_SESSION_DELETE_EVENT,
   TESTCASES_APPLY_EVENT,
+  VISUALIZE_CASE_EVENT,
   notifyAiSessionDeleted,
 };

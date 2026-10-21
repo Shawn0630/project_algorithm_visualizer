@@ -167,6 +167,8 @@ export function tracerReference(ext: string): string {
     '3. Feed the tracer the SAME live data the algorithm mutates: set() it once, then patch() on every write so the view tracks the real values - never visualize a copy.',
     '4. Rhythm: select() what is being examined -> delay() -> mutate -> patch() the changed cells -> delay() -> depatch()/deselect() to clean up. A change with no delay() after it never becomes a frame.',
     '5. Exactly one Layout.setRoot(...), placed before the first delay().',
+    '6. If the file ONLY defines a class (e.g. a LeetCode-style class Solution) or functions and runs nothing at top level, NOTHING will visualize - a class definition alone produces no frames. Then APPEND a driver section at the very end of the file: create the tracers, set the layout root once, instantiate the class, call the method with a concrete example input, narrate the input and the result through a LogTracer, and delay() before and after the call. Keep the class itself unchanged unless the instruction asks to instrument its internals.',
+    '7. The ONLY visualization library in this app is algorithm_visualizer. There is NO module named py_viz (or anything similar), and there are NO tracer methods named set_variables or mark_line - never import a module or call a method that is not in this reference.',
     '',
     LANGUAGE_NOTES[language],
     '',

@@ -1,20 +1,26 @@
 import React from 'react';
 import { connect } from 'react-redux';
-import { TestApi, AiApi } from 'apis';
-import { extension, aiPadKey, TESTCASES_APPLY_EVENT } from 'common/util';
+import { TestApi, AiApi, PadTestsApi } from 'apis';
+import { extension, aiPadKey, TESTCASES_APPLY_EVENT, VISUALIZE_CASE_EVENT } from 'common/util';
+import { buildCaseVisualization } from 'common/visualizeCase';
 import styles from './TestPanel.module.scss';
 
 // LeetCode-style test cases for a code pad, docked under the editor
-// as its own card. The framework for adding cases to a page is a
-// tests.json file in the page's folder ({entry, cases: [{name,
-// args, expected}]}): it is the source of truth, it opens as a pad
-// like any other file, and the panel re-seeds whenever it changes.
-// Cases can also be added/edited directly in the panel - those are
-// kept per code pad in localStorage and last until the file
-// changes. Running sends the pad's current code to the server,
-// which calls the entry function/method once per case with the
-// JSON arguments and compares the return value against the
-// expected JSON.
+// as its own card, with three tabs: Testcase (edit + run cases),
+// Test Result, and AI Test Cases (a dedicated generation session
+// for this pad - ask for cases, then follow up to refine them).
+//
+// Case storage: a tests.json file in the page's folder ({entry,
+// cases: [{name, args, expected}]}) seeds a pad the first time and
+// re-seeds it whenever the file changes. The working list - entry,
+// cases, and the generation chat - is kept per code pad in the
+// server's database (table pad_tests, via /api/pad-tests), with
+// localStorage as a hot cache: edits sync to the server (debounced)
+// and the server copy wins on load when it is newer, so the cases
+// follow the user across browsers and machines. Runs send the pad's
+// current code to the server, which calls the entry once per case
+// with the JSON arguments and compares the return value against
+// the expected JSON.
 const RUNNABLE_EXTS = ['py', 'js', 'java'];
 const STORAGE_KEY = 'av-tests-v1';
 
@@ -43,7 +49,7 @@ const toTextCase = tc => ({
 
 const blankCase = n => ({ name: `Case ${n}`, argsText: '[]', expectedText: 'null' });
 
-// The page's problem statement for the AI generator: the first
+// The page's problem statement for the AI session: the first
 // Readme (or other Markdown doc, LICENSE excluded), length-capped.
 function pageReadme(files) {
   const docs = (files || []).filter(f => /\.md$/i.test(f.name) && !/license/i.test(f.name));
@@ -51,30 +57,115 @@ function pageReadme(files) {
   return readme ? String(readme.content || '').slice(0, 8000) : '';
 }
 
+// The part of a pad record that lives in the database.
+const persistSlice = pad => ({
+  entry: pad.entry,
+  cases: pad.cases,
+  seededFrom: pad.seededFrom,
+  chat: pad.chat || [],
+});
+
 class TestPanel extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { pads: loadStore(), tab: 'case', running: false, generating: false, genError: '' };
-  }
-
-  componentDidUpdate(prevProps, prevState) {
-    if (prevState.pads !== this.state.pads) saveStore(this.state.pads);
+    this.state = {
+      pads: loadStore(),
+      tab: 'case',
+      running: false,
+      vizError: '',
+      chatInput: '',
+      chatSending: false,
+      chatError: '',
+    };
+    this.sentSlices = {};
+    this.syncTimers = {};
   }
 
   componentDidMount() {
     // The AI Assistant can hand this pad a set of generated test
     // cases (its third kind of result): they land here exactly like
-    // the panel's own Generate button output.
+    // the chat session's own output.
     this.handleApplyCases = event => {
       const detail = event.detail || {};
       if (!detail.key || detail.key !== this.padKey()) return;
-      this.ingestCases(detail.entry, detail.cases);
+      this.ingestCases(detail.entry, detail.cases, 'append');
     };
     window.addEventListener(TESTCASES_APPLY_EVENT, this.handleApplyCases);
+    // Hydrate from the server store: its records win when newer
+    // than the local copies; local-only or newer pads upload.
+    PadTestsApi.list().then(({ entries }) => {
+      if (!entries) return;
+      this.setState(prev => {
+        const pads = { ...prev.pads };
+        Object.keys(entries).forEach(key => {
+          const server = entries[key];
+          const local = pads[key];
+          if (!local || (server.ts || 0) >= (local.ts || 0)) {
+            pads[key] = {
+              ...(local || {}),
+              entry: typeof server.entry === 'string' ? server.entry : '',
+              cases: Array.isArray(server.cases) && server.cases.length ? server.cases : [blankCase(1)],
+              seededFrom: server.seededFrom === undefined ? null : server.seededFrom,
+              chat: Array.isArray(server.chat) ? server.chat : [],
+              active: local ? local.active : 0,
+              open: local ? local.open : false,
+              results: local ? local.results : null,
+              runError: local ? local.runError : '',
+              durationMs: local ? local.durationMs : null,
+              ts: server.ts || 0,
+            };
+            this.sentSlices[key] = JSON.stringify(persistSlice(pads[key]));
+          }
+        });
+        return { pads };
+      }, () => {
+        const key = this.padKey();
+        if (key) this.scheduleSync(key);
+      });
+    }).catch(() => {
+      // Server unreachable: the localStorage copies carry on alone.
+    });
   }
 
   componentWillUnmount() {
     window.removeEventListener(TESTCASES_APPLY_EVENT, this.handleApplyCases);
+    Object.values(this.syncTimers).forEach(timer => window.clearTimeout(timer));
+  }
+
+  componentDidUpdate(prevProps, prevState) {
+    if (prevState.pads !== this.state.pads) {
+      saveStore(this.state.pads);
+      const key = this.padKey();
+      if (key) this.scheduleSync(key);
+    }
+  }
+
+  // Debounced upload of the current pad's persisted slice, skipped
+  // when nothing in the slice actually changed.
+  scheduleSync(key) {
+    if (this.syncTimers[key]) window.clearTimeout(this.syncTimers[key]);
+    this.syncTimers[key] = window.setTimeout(() => this.syncOut(key), 500);
+  }
+
+  syncOut(key) {
+    const pad = this.pad();
+    if (!pad || this.padKey() !== key) return;
+    const slice = persistSlice(pad);
+    const json = JSON.stringify(slice);
+    if (this.sentSlices[key] === json) return;
+    PadTestsApi.put({ key, ...slice }).then(({ record }) => {
+      this.sentSlices[key] = json;
+      if (record && record.ts) {
+        this.setState(prev => {
+          const current = prev.pads[key];
+          if (!current || current.ts === record.ts) return null;
+          return { pads: { ...prev.pads, [key]: { ...current, ts: record.ts } } };
+        });
+      }
+    }).catch(() => {
+      // Offline or server down: the local copy remains the truth
+      // until the next successful sync.
+    });
   }
 
   // The file whose code is tested: the editing file when it is
@@ -88,10 +179,7 @@ class TestPanel extends React.Component {
 
   // The framework for adding cases to a page: a tests.json file in
   // the page's folder - {entry, cases: [{name, args, expected}]}.
-  // It is the source of truth: edit it (it opens as a pad like any
-  // file) and the panel re-seeds from it. Edits made in the panel
-  // itself are local extras, kept per code pad in localStorage, and
-  // last until the file changes.
+  // It is the seed: the panel re-seeds from it whenever it changes.
   defaults() {
     const { files } = this.props.current;
     const testsFile = (files || []).find(file => file.name === 'tests.json');
@@ -118,6 +206,7 @@ class TestPanel extends React.Component {
     const key = this.padKey();
     if (!key) return null;
     const stored = this.state.pads[key];
+    const chat = (stored && stored.chat) || [];
     const defaults = this.defaults();
     if (defaults && (!stored || stored.seededFrom !== defaults.raw)) {
       return {
@@ -129,9 +218,11 @@ class TestPanel extends React.Component {
         runError: '',
         durationMs: null,
         seededFrom: defaults.raw,
+        chat,
+        ts: stored ? stored.ts : 0,
       };
     }
-    if (stored) return stored;
+    if (stored) return { ...stored, chat };
     return {
       entry: '',
       cases: [blankCase(1)],
@@ -141,6 +232,8 @@ class TestPanel extends React.Component {
       runError: '',
       durationMs: null,
       seededFrom: null,
+      chat,
+      ts: 0,
     };
   }
 
@@ -189,19 +282,19 @@ class TestPanel extends React.Component {
     });
   }
 
-  // Drops a set of AI-generated cases into this pad's list -
-  // replacing it when it still holds only blank cases, appended
-  // after hand-written ones otherwise - then runs them against the
-  // current code. Shared by the Generate button below and by test
-  // cases handed over from the AI Assistant.
-  ingestCases(entry, cases) {
+  // Drops a set of AI-generated cases into this pad's list, then
+  // runs them against the current code. Mode "append" adds the
+  // cases (replacing the list when it still holds only blank
+  // cases); mode "replace" swaps the whole list. Shared by the
+  // AI Assistant hand-off and the generation chat's Apply button.
+  ingestCases(entry, cases, mode) {
     const pad = this.pad();
     if (!pad || !Array.isArray(cases) || !cases.length) return;
     const textCases = cases.map(toTextCase);
     const blankOnly = pad.cases.every(tc => tc.argsText === '[]' && tc.expectedText === 'null');
-    const merged = blankOnly ? textCases : [...pad.cases, ...textCases];
+    const merged = mode === 'replace' || blankOnly ? textCases : [...pad.cases, ...textCases];
     this.updatePad({
-      entry: pad.entry.trim() ? pad.entry : (entry || ''),
+      entry: entry && (mode === 'replace' || !pad.entry.trim()) ? entry : pad.entry,
       cases: merged,
       active: 0,
       open: true,
@@ -210,44 +303,167 @@ class TestPanel extends React.Component {
     }, () => this.run());
   }
 
-  // Ask the LLM (same configured endpoint as the AI Assistant, and
-  // the same per-user model pick) for a set of test cases - entry,
-  // args and expected included - and drop them straight into this
-  // pad's case list: replacing the list when it still holds only
-  // blank cases, appended after hand-written ones otherwise. The
-  // fresh cases are then run against the current code right away.
-  generate() {
+  // ---- The dedicated test-case generation session (chat tab) ----
+
+  sendChat(text) {
     const file = this.codeFile();
     const pad = this.pad();
-    if (!file || !pad || this.state.generating) return;
-    this.setState({ generating: true, genError: '' });
+    if (!file || !pad || this.state.chatSending) return;
+    const instruction = (typeof text === 'string' ? text : this.state.chatInput).trim();
+    if (!instruction) return;
+    const history = (pad.chat || []).slice(-20).map(m => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.text,
+    }));
+    const userChat = [...(pad.chat || []), { role: 'user', text: instruction }].slice(-100);
+    this.updatePad({ chat: userChat });
+    this.setState({ chatInput: '', chatSending: true, chatError: '' });
+    const currentCases = pad.cases.map(tc => {
+      try {
+        return { name: tc.name, args: JSON.parse(tc.argsText), expected: JSON.parse(tc.expectedText) };
+      } catch (error) {
+        return null;
+      }
+    }).filter(Boolean);
     let model;
     try {
       model = window.localStorage.getItem('av-ai-model-v1') || undefined;
     } catch (error) {
       model = undefined;
     }
-    AiApi.generateTests({
+    AiApi.testChat({
       language: extension(file.name),
       code: file.content,
       entry: pad.entry,
       context: pageReadme(this.props.current.files),
+      currentCases,
+      history,
+      instruction,
       model,
-      count: 6,
-    }).then(({ entry, cases }) => {
-      this.setState({ generating: false });
-      if (!cases || !cases.length) {
-        this.setState({ genError: 'The model returned no usable cases - try again.' });
-        return;
+    }).then(({ message, entry, mode, cases }) => {
+      const assistantMsg = { role: 'assistant', text: message || '' };
+      if (Array.isArray(cases) && cases.length) {
+        assistantMsg.cases = cases;
+        assistantMsg.mode = mode === 'replace' ? 'replace' : 'append';
+        assistantMsg.entry = entry || '';
       }
-      this.ingestCases(entry, cases);
+      const current = this.pad();
+      const chat = [...((current && current.chat) || []), assistantMsg].slice(-100);
+      this.updatePad({ chat });
+      this.setState({ chatSending: false });
     }).catch(error => {
       const data = error && error.response && error.response.data;
       this.setState({
-        generating: false,
-        genError: (data && data.message) || 'Generation failed. Is the server running?',
+        chatSending: false,
+        chatError: (data && data.message) || 'The request failed. Is the server running?',
       });
     });
+  }
+
+  applyChatCases(index) {
+    const pad = this.pad();
+    if (!pad) return;
+    const msg = (pad.chat || [])[index];
+    if (!msg || !msg.cases || msg.applied) return;
+    const chat = pad.chat.map((m, i) => i === index ? { ...m, applied: true } : m);
+    this.updatePad({ chat }, () => this.ingestCases(msg.entry, msg.cases, msg.mode));
+  }
+
+  clearChat() {
+    this.updatePad({ chat: [] });
+    this.setState({ chatError: '' });
+  }
+
+  renderChat(pad) {
+    const chat = pad.chat || [];
+    return (
+      <div>
+        {
+          chat.length ? (
+            <div className={styles.chat_top}>
+              <span className={styles.spacer}/>
+              <button className={styles.chat_clear} onClick={() => this.clearChat()}>Clear chat</button>
+            </div>
+          ) : null
+        }
+        <div className={styles.chat_list}>
+          {
+            chat.length === 0 ? (
+              <button className={styles.gen_btn} disabled={this.state.chatSending}
+                      onClick={() => this.sendChat('Generate a good set of test cases for this code.')}>
+                {this.state.chatSending ? 'Generating...' : 'Generate test cases'}
+              </button>
+            ) : chat.map((m, i) => (
+              <div key={i} className={m.role === 'user' ? styles.chat_user : styles.chat_ai}>
+                <div className={styles.chat_text}>{m.text}</div>
+                {
+                  m.cases ? (
+                    <div className={styles.chat_cases}>
+                      <div className={styles.chat_cases_head}>
+                        {m.cases.length} case{m.cases.length === 1 ? '' : 's'} · {m.mode === 'replace' ? 'replaces the list' : 'new cases'}
+                      </div>
+                      <div className={styles.chat_cases_names}>
+                        {m.cases.map(c => c.name).join(' · ')}
+                      </div>
+                      <button className={styles.gen_btn} disabled={m.applied}
+                              onClick={() => this.applyChatCases(i)}>
+                        {m.applied ? 'Applied ✓' : (m.mode === 'replace' ? 'Apply: replace all cases' : 'Apply: add these cases')}
+                      </button>
+                    </div>
+                  ) : null
+                }
+              </div>
+            ))
+          }
+          {this.state.chatSending && chat.length ? <div className={styles.hint}>Thinking...</div> : null}
+        </div>
+        {this.state.chatError ? <pre className={styles.error}>{this.state.chatError}</pre> : null}
+        <div className={styles.chat_input_row}>
+          <input className={styles.value_input} type="text" value={this.state.chatInput}
+                 placeholder="Ask for cases, or follow up: add an empty-input case, make case 2 harder..."
+                 onChange={e => this.setState({ chatInput: e.target.value })}
+                 onKeyDown={e => { if (e.key === 'Enter') this.sendChat(); }}/>
+          <button className={styles.run} disabled={this.state.chatSending} onClick={() => this.sendChat()}>
+            {this.state.chatSending ? '...' : 'Send'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Plays one case in the visualization pane: the pad's code is
+  // wrapped with a generated harness that calls the entry with this
+  // case's args inside the tracer environment (Input/Output narrated
+  // by a LogTracer, numeric arrays shown as charts), and the Player
+  // builds and auto-plays the result. The pad itself is untouched.
+  visualizeCase(index) {
+    const file = this.codeFile();
+    const pad = this.pad();
+    if (!file || !pad) return;
+    const entry = pad.entry.trim();
+    if (!entry) {
+      this.setState({ vizError: 'Set the entry function/method name first (e.g. minOperations, or the method on class Solution).' });
+      return;
+    }
+    const tc = pad.cases[index];
+    if (!tc) return;
+    let args;
+    try {
+      args = JSON.parse(tc.argsText);
+      if (!Array.isArray(args)) throw new Error('not an array');
+    } catch (error) {
+      this.setState({ vizError: `${tc.name}: Args must be a JSON array, e.g. ["dog"] or [1, 2].` });
+      return;
+    }
+    try {
+      const wrapped = buildCaseVisualization(extension(file.name), file.content, entry, args);
+      this.setState({ vizError: '' });
+      window.dispatchEvent(new CustomEvent(VISUALIZE_CASE_EVENT, {
+        detail: { code: wrapped, name: file.name },
+      }));
+    } catch (error) {
+      this.setState({ vizError: error.message });
+    }
   }
 
   run() {
@@ -308,6 +524,7 @@ class TestPanel extends React.Component {
     const passed = pad.results.filter(r => r.pass).length;
     return (
       <div>
+        {this.state.vizError ? <pre className={styles.error}>{this.state.vizError}</pre> : null}
         <div className={passed === pad.results.length ? styles.summary_ok : styles.summary_bad}>
           {passed}/{pad.results.length} passed{pad.durationMs != null ? ` · ${pad.durationMs} ms` : ''}
         </div>
@@ -336,6 +553,9 @@ class TestPanel extends React.Component {
                   ? <details className={styles.stdout}><summary>stdout</summary><pre>{r.stdout}</pre></details>
                   : null
               }
+              <button className={styles.viz_btn} onClick={() => this.visualizeCase(i)}>
+                ▶ Visualize this case
+              </button>
             </div>
           ))
         }
@@ -368,6 +588,11 @@ class TestPanel extends React.Component {
             &gt;_ Test Result
             {passedCount != null ? ` (${passedCount}/${pad.results.length})` : ''}
           </button>
+          <button className={`${styles.tab} ${tab === 'chat' ? styles.tab_active : ''}`}
+                  title={pad.open && tab === 'chat' ? 'Click to collapse' : 'Click to expand'}
+                  onClick={() => this.onTab('chat')}>
+            ✦ AI Test Cases
+          </button>
           <span className={styles.spacer}/>
           {file ? <span className={styles.code_label}>{file.name}</span> : null}
           <button className={styles.run} disabled={!file || running} onClick={() => this.run()}>
@@ -380,16 +605,6 @@ class TestPanel extends React.Component {
               {
                 tab === 'case' ? (
                   <div>
-                    <div className={styles.gen_row}>
-                      <button className={styles.gen_btn} disabled={!file || this.state.generating}
-                              onClick={() => this.generate()}>
-                        {this.state.generating ? 'Generating...' : 'Generate with AI'}
-                      </button>
-                      <span className={styles.hint}>
-                        AI writes cases (args + expected) for the current code, drops them in here and runs them.
-                      </span>
-                    </div>
-                    {this.state.genError ? <pre className={styles.error}>{this.state.genError}</pre> : null}
                     <div className={styles.chips}>
                       {
                         pad.cases.map((tc, i) => (
@@ -421,15 +636,15 @@ class TestPanel extends React.Component {
                     <div className={styles.field_label}>expected =</div>
                     <input className={styles.value_input} type="text" value={pad.cases[active].expectedText}
                            onChange={e => this.updateCase(active, { expectedText: e.target.value })}/>
-                    <div className={styles.note}>
-                      To add cases to a page for good, put a <code>tests.json</code> next to its code -
-                      it opens as a pad here, and the panel follows it:{' '}
-                      <code>{'{"entry": "minOperations", "cases": [{"name": "Case 1", "args": ["dog"], "expected": 1}]}'}</code>.
-                      Cases added in this panel are kept in this browser only. Runs happen on the server
-                      (Python / JavaScript / Java) with the visualization library stubbed out.
+                    <div className={styles.gen_row}>
+                      <button className={styles.gen_btn} disabled={!file} onClick={() => this.visualizeCase(active)}>
+                        ▶ Visualize this case
+                      </button>
                     </div>
+                    {this.state.vizError ? <pre className={styles.error}>{this.state.vizError}</pre> : null}
                   </div>
-                ) : this.renderResults(pad)
+                ) : tab === 'chat' ? this.renderChat(pad)
+                : this.renderResults(pad)
               }
             </div>
           ) : null

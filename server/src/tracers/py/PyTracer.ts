@@ -62,7 +62,7 @@ export class PyTracer extends Tracer {
         .then(() => new Promise((resolve, reject) => {
           const visualizationPath = path.resolve(tempPath, 'visualization.json');
           res.sendFile(visualizationPath, (err: any) => {
-            if (err) return reject(new Error('Visualization Not Found'));
+            if (err) return reject(new Error('The code ran without errors but produced no visualization - nothing called the tracers. If the file only defines a class or functions, add a driver section at the end that creates the tracers, sets the layout root (Layout.set_root) and calls the code.'));
             resolve();
           });
         }))
