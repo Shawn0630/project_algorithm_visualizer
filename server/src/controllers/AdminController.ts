@@ -1,59 +1,115 @@
+import axios from 'axios';
 import express from 'express';
-import fs from 'fs';
 import path from 'path';
 import { Controller } from 'controllers/Controller';
-import { algorithmsDir, leetcodeDir } from 'config/paths';
-import { readAiCalls } from 'utils/aiCallLog';
+import { callLlm } from 'controllers/AiController';
+import { appendAiCall, readAiCalls } from 'utils/aiCallLog';
+import {
+  addProblemTag,
+  contentTree,
+  createProblem,
+  deleteProblem,
+  deleteProblemFile,
+  findProblem,
+  findProblemBySlug,
+  listProblemFiles,
+  listProblemTags,
+  listTags,
+  ProblemFile,
+  removeProblemTag,
+  reseedAlgorithms,
+  saveImportedProblem,
+  upsertProblemFile,
+} from 'utils/db';
+import { htmlToMarkdown } from 'utils/htmlToMarkdown';
+import { createKey } from 'utils/hierarchy';
 import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
 
 // Admin console, served at /api/admin (page) with JSON endpoints under
-// /api/admin/*. It manages the content working copies the server
-// serves from (server/public/algorithms and server/public/leetcode)
-// and shows the AI assistant call log. There is deliberately no auth:
-// like the rest of this server it is meant for local / intranet use
-// only - do not expose it publicly.
+// /api/admin/*. Content lives in the SQLite store (utils/db): the
+// content endpoints below are addressed the way the UI thinks -
+// (source, category=tag, algorithm=title, file) - and translated to
+// problem rows. Edits are durable in the database and take effect
+// immediately (hierarchy.refresh() after every mutation).
 //
-// Content edits land in the working copies and are picked up by the
-// app immediately (hierarchy.refresh() after every mutation). They do
-// NOT commit anything: the next content pull (server start) resets
-// the working copies from the LAN git server, so durable changes
-// belong in those repos.
-const SOURCES: { [name: string]: string } = {
-  algorithms: algorithmsDir,
-  leetcode: leetcodeDir,
+// A problem's files are shared by all its categories (tags); only
+// code sessions are per category. Removing an algorithm from a
+// category removes that tag; the problem itself is deleted when its
+// last tag goes. There is deliberately no auth: local / intranet use
+// only - do not expose it publicly.
+const ROOTS: { [name: string]: string } = {
+  algorithms: 'algorithm',
+  leetcode: 'leetcode',
 };
 
-function safeSegment(value: any): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 200 &&
-    !value.includes('/') && !value.includes('\\') && value !== '.' && value !== '..';
+function rootOf(source: any): string | null {
+  return ROOTS[String(source)] || null;
 }
 
-function removeDir(dir: string): void {
-  const fsAny = fs as any;
-  if (typeof fsAny.rmSync === 'function') fsAny.rmSync(dir, {recursive: true, force: true});
-  else (fs.rmdirSync as any)(dir, {recursive: true});
+interface AdminCase { name: string, args: any[], expected: any }
+
+function validCases(raw: any): AdminCase[] | null {
+  if (!Array.isArray(raw)) return null;
+  const cases: AdminCase[] = [];
+  for (const item of raw.slice(0, 12)) {
+    if (!item || typeof item !== 'object' || !Array.isArray(item.args)) return null;
+    cases.push({
+      name: typeof item.name === 'string' && item.name ? item.name.slice(0, 60) : `Case ${cases.length + 1}`,
+      args: item.args,
+      expected: item.expected === undefined ? null : item.expected,
+    });
+  }
+  return cases;
 }
 
-function tree(root: string) {
-  if (!fs.existsSync(root)) return [];
-  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
-  return (fs.readdirSync as any)(root, {withFileTypes: true})
-    .filter((entry: any) => entry.isDirectory() && !entry.name.startsWith('.'))
-    .map((category: any) => ({
-      category: category.name,
-      algorithms: (fs.readdirSync as any)(path.join(root, category.name), {withFileTypes: true})
-        .filter((entry: any) => entry.isDirectory())
-        .map((algorithm: any) => ({
-          name: algorithm.name,
-          files: (fs.readdirSync as any)(path.join(root, category.name, algorithm.name), {withFileTypes: true})
-            .filter((entry: any) => entry.isFile())
-            .map((file: any) => file.name)
-            .sort(),
-        }))
-        .sort(byName),
-    }))
-    .sort((a: any, b: any) => a.category.localeCompare(b.category));
+// Finds a JSON object in an LLM reply: the whole text, a fenced
+// block, or the first balanced {...} span.
+function extractJsonObject(content: string): any | null {
+  const candidates: string[] = [];
+  const trimmed = String(content || '').trim();
+  candidates.push(trimmed);
+  const fence = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)```/);
+  if (fence) candidates.push(fence[1]);
+  const start = trimmed.indexOf('{');
+  if (start >= 0) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < trimmed.length; i++) {
+      const ch = trimmed[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          candidates.push(trimmed.slice(start, i + 1));
+          break;
+        }
+      }
+    }
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (error) {
+      // try the next shape
+    }
+  }
+  return null;
+}
+
+function parseLeetcodeSlug(input: any): string | null {
+  const text = String(input || '').trim();
+  const fromUrl = text.match(/leetcode\.(?:com|cn)\/problems\/([a-z0-9-]+)/i);
+  if (fromUrl) return fromUrl[1].toLowerCase();
+  if (/^[a-z0-9-]+$/i.test(text)) return text.toLowerCase();
+  return null;
 }
 
 export class AdminController extends Controller {
@@ -69,6 +125,10 @@ export class AdminController extends Controller {
     this.router.delete('/content/file', this.deleteFile);
     this.router.post('/content/refresh', this.refreshContent);
     this.router.post('/content/repull', this.repullContent);
+    this.router.get('/tags', this.getTags);
+    this.router.post('/leetcode/fetch', this.fetchLeetcode);
+    this.router.post('/leetcode/generate', this.generateLeetcode);
+    this.router.post('/problems', this.saveProblem);
     this.router.get('/ai-calls', this.getAiCalls);
     this.router.get('/llm-models', this.getLlmModels);
   }
@@ -81,87 +141,99 @@ export class AdminController extends Controller {
     res.sendFile(path.resolve(__dirname, 'admin.html'));
   };
 
-  // Resolves a content path from validated segments, or null when any
-  // segment is unsafe / the source is unknown.
-  private contentPath(source: any, category: any, algorithm?: any, file?: any): string | null {
-    const root = SOURCES[String(source)];
-    if (!root || !safeSegment(category)) return null;
-    const segments = [category];
-    if (algorithm !== undefined) {
-      if (!safeSegment(algorithm)) return null;
-      segments.push(algorithm);
-    }
-    if (file !== undefined) {
-      if (!safeSegment(file)) return null;
-      segments.push(file);
-    }
-    const resolved = path.resolve(root, ...segments);
-    return resolved.startsWith(root + path.sep) ? resolved : null;
+  private adminTree(root: string) {
+    return contentTree(root).map(category => ({
+      category: category.category,
+      algorithms: category.algorithms.map(algorithm => ({name: algorithm.title, files: algorithm.files})),
+    }));
   }
 
   getContent = (req: express.Request, res: express.Response) => {
-    res.json({algorithms: tree(algorithmsDir), leetcode: tree(leetcodeDir)});
+    res.json({algorithms: this.adminTree('algorithm'), leetcode: this.adminTree('leetcode')});
   };
 
   getFile = (req: express.Request, res: express.Response) => {
     const query: any = req.query;
-    const {source, category, algorithm, file} = query;
-    const filePath = this.contentPath(source, category, algorithm, file);
-    if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({message: '文件不存在或路径不合法。'});
-    res.json({content: fs.readFileSync(filePath, 'utf8')});
+    const root = rootOf(query.source);
+    const problem = root ? findProblem(root, String(query.category || ''), String(query.algorithm || '')) : undefined;
+    if (!problem) return res.status(404).json({message: 'Problem not found.'});
+    const file = listProblemFiles(problem.id).find(entry => entry.name === String(query.file || ''));
+    if (!file) return res.status(404).json({message: 'File not found.'});
+    return res.json({content: file.content});
   };
 
   putFile = (req: express.Request, res: express.Response) => {
-    const {source, category, algorithm, file, content} = req.body;
-    const filePath = this.contentPath(source, category, algorithm, file);
-    if (!filePath) return res.status(400).json({message: '路径不合法。'});
-    if (typeof content !== 'string' || content.length > 2 * 1024 * 1024) {
-      return res.status(400).json({message: '内容缺失或过大。'});
+    const {source, category, algorithm, file, content} = req.body || {};
+    const root = rootOf(source);
+    const problem = root ? findProblem(root, String(category || ''), String(algorithm || '')) : undefined;
+    if (!problem) return res.status(404).json({message: 'Problem not found.'});
+    if (typeof file !== 'string' || !file || file.includes('/') || file.length > 120) {
+      return res.status(400).json({message: 'Invalid file name.'});
     }
-    fs.mkdirSync(path.dirname(filePath), {recursive: true});
-    fs.writeFileSync(filePath, content);
+    if (typeof content !== 'string' || content.length > 2 * 1024 * 1024) {
+      return res.status(400).json({message: 'Content missing or too large.'});
+    }
+    upsertProblemFile(problem.id, file, content);
     this.server.hierarchy.refresh();
     return res.json({ok: true});
   };
 
   createAlgorithm = (req: express.Request, res: express.Response) => {
-    const {source, category, name} = req.body;
-    const dir = this.contentPath(source, category, name);
-    if (!dir) return res.status(400).json({message: '路径不合法。'});
-    fs.mkdirSync(dir, {recursive: true});
-    const readme = path.join(dir, 'README.md');
-    if (!fs.existsSync(readme)) fs.writeFileSync(readme, `# ${name}\n`);
+    const {source, category, name} = req.body || {};
+    const root = rootOf(source);
+    if (!root || typeof category !== 'string' || !category.trim() || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({message: 'A source, a category and a name are required.'});
+    }
+    const title = name.trim();
+    const tag = category.trim();
+    if (findProblem(root, tag, title)) return res.json({ok: true, existed: true});
+    const sameSlug = findProblemBySlug(root, createKey(title));
+    if (sameSlug && sameSlug.title === title) {
+      // The same problem in another category: just add this tag, so
+      // it now appears in both - with one shared set of files.
+      addProblemTag(sameSlug.id, tag);
+      this.server.hierarchy.refresh();
+      return res.json({ok: true, linked: true});
+    }
+    createProblem({root, title, source: 'manual', tags: [tag], files: [{name: 'README.md', content: `# ${title}\n`}]});
     this.server.hierarchy.refresh();
     return res.json({ok: true});
   };
 
   deleteAlgorithm = (req: express.Request, res: express.Response) => {
     const query: any = req.query;
-    const {source, category, algorithm} = query;
-    const dir = this.contentPath(source, category, algorithm);
-    if (!dir || !fs.existsSync(dir)) return res.status(404).json({message: '算法不存在或路径不合法。'});
-    removeDir(dir);
+    const root = rootOf(query.source);
+    const problem = root ? findProblem(root, String(query.category || ''), String(query.algorithm || '')) : undefined;
+    if (!problem) return res.status(404).json({message: 'Problem not found.'});
+    removeProblemTag(problem.id, String(query.category || ''));
+    const deleted = listProblemTags(problem.id).length === 0;
+    if (deleted) deleteProblem(problem.id);
     this.server.hierarchy.refresh();
-    return res.json({ok: true});
+    return res.json({ok: true, deleted});
   };
 
   createFile = (req: express.Request, res: express.Response) => {
-    const {source, category, algorithm, name} = req.body;
-    const filePath = this.contentPath(source, category, algorithm, name);
-    if (!filePath) return res.status(400).json({message: '路径不合法。'});
-    if (fs.existsSync(filePath)) return res.status(409).json({message: '文件已存在。'});
-    fs.mkdirSync(path.dirname(filePath), {recursive: true});
-    fs.writeFileSync(filePath, '');
+    const {source, category, algorithm, name} = req.body || {};
+    const root = rootOf(source);
+    const problem = root ? findProblem(root, String(category || ''), String(algorithm || '')) : undefined;
+    if (!problem) return res.status(404).json({message: 'Problem not found.'});
+    if (typeof name !== 'string' || !name || name.includes('/') || name.length > 120) {
+      return res.status(400).json({message: 'Invalid file name.'});
+    }
+    if (listProblemFiles(problem.id).some(file => file.name === name)) {
+      return res.status(409).json({message: 'File already exists.'});
+    }
+    upsertProblemFile(problem.id, name, '');
     this.server.hierarchy.refresh();
     return res.json({ok: true});
   };
 
   deleteFile = (req: express.Request, res: express.Response) => {
     const query: any = req.query;
-    const {source, category, algorithm, file} = query;
-    const filePath = this.contentPath(source, category, algorithm, file);
-    if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({message: '文件不存在或路径不合法。'});
-    fs.unlinkSync(filePath);
+    const root = rootOf(query.source);
+    const problem = root ? findProblem(root, String(query.category || ''), String(query.algorithm || '')) : undefined;
+    if (!problem) return res.status(404).json({message: 'Problem not found.'});
+    deleteProblemFile(problem.id, String(query.file || ''));
     this.server.hierarchy.refresh();
     return res.json({ok: true});
   };
@@ -171,9 +243,168 @@ export class AdminController extends Controller {
     res.json({ok: true});
   };
 
-  repullContent = async (req: express.Request, res: express.Response) => {
-    await this.server.hierarchy.update();
-    res.json({ok: true});
+  // Re-seed: replaces every seed-sourced problem with the bundled
+  // algorithms/ content (imported problems are untouched).
+  repullContent = (req: express.Request, res: express.Response) => {
+    try {
+      const count = reseedAlgorithms();
+      this.server.hierarchy.refresh();
+      return res.json({ok: true, count});
+    } catch (error) {
+      return res.status(400).json({message: (error as Error).message});
+    }
+  };
+
+  getTags = (req: express.Request, res: express.Response) => {
+    const root = rootOf(req.query.source) || 'leetcode';
+    res.json({tags: listTags(root)});
+  };
+
+  // Fetches a problem statement from LeetCode's public GraphQL API
+  // and converts it to the app's Markdown, with the official starter
+  // snippets and example test cases for the AI formatting pass.
+  fetchLeetcode = async (req: express.Request, res: express.Response) => {
+    const slug = parseLeetcodeSlug((req.body || {}).input);
+    if (!slug) return res.status(400).json({message: 'Paste a LeetCode problem URL or its slug (e.g. two-sum).'});
+    const query = `query questionData($titleSlug: String!) {
+      question(titleSlug: $titleSlug) {
+        questionFrontendId title titleSlug difficulty content
+        topicTags { name }
+        codeSnippets { lang langSlug code }
+        exampleTestcases
+      }
+    }`;
+    try {
+      const {data} = await axios.post('https://leetcode.com/graphql', {query, variables: {titleSlug: slug}}, {
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
+          Referer: `https://leetcode.com/problems/${slug}/`,
+        },
+        timeout: 20000,
+      });
+      const question = data && data.data && data.data.question;
+      if (!question) return res.status(404).json({message: `LeetCode has no problem with slug "${slug}".`});
+      return res.json({
+        frontendId: question.questionFrontendId,
+        title: question.title,
+        slug: question.titleSlug,
+        difficulty: question.difficulty,
+        topics: (question.topicTags || []).map((tag: any) => tag.name),
+        markdown: htmlToMarkdown(question.content || ''),
+        snippets: (question.codeSnippets || []).map((snippet: any) => ({lang: snippet.lang, langSlug: snippet.langSlug, code: snippet.code})),
+        exampleTestcases: question.exampleTestcases || '',
+      });
+    } catch (error) {
+      const status = error && error.response && error.response.status;
+      return res.status(502).json({
+        message: `Fetching from LeetCode failed${status ? ` (HTTP ${status})` : ''}: ${(error as Error).message} - check the network connection and the slug.`,
+      });
+    }
+  };
+
+  // AI formatting pass: turns the fetched statement into the app's
+  // README format and derives entry point + test cases from the
+  // statement examples. Same call chain (and log) as the assistant.
+  generateLeetcode = async (req: express.Request, res: express.Response) => {
+    const {title, markdown, exampleTestcases, model} = req.body || {};
+    if (typeof title !== 'string' || !title || typeof markdown !== 'string' || !markdown) {
+      return res.status(400).json({message: 'Fetch a problem first (title and markdown are required).'});
+    }
+    const startedAt = Date.now();
+    const messages = [
+      {
+        role: 'system',
+        content: [
+          'You format LeetCode problems for a code-visualization app and write its test cases.',
+          'Reply with a single JSON object only - no prose, no code fences: {"readme": "...", "entry": "...", "cases": [{"name": "...", "args": [...], "expected": ...}]}.',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: [
+          `Problem title (use it verbatim as the first line, as "# ${title}"): ${title}`,
+          '',
+          'Statement in Markdown (converted from LeetCode HTML; clean it up without changing its meaning):',
+          markdown.slice(0, 12000),
+          '',
+          `LeetCode example test case inputs (newline-separated values, one argument per line, in order): ${exampleTestcases || '(none provided)'}`,
+          '',
+          'Rules for "readme": the title line, then the cleaned statement, keeping the examples and constraints sections. Do not add a solution or hints.',
+          'Rules for "entry": the name of the function or Solution method the test cases call (as it appears in the starter code).',
+          'Rules for "cases": args is the JSON array of call arguments in order; expected is the JSON value returned. Start with every example from the statement (decode the example inputs above), then add typical and edge cases, at most 10 in total. Compute every expected value correctly.',
+        ].join('\n'),
+      },
+    ];
+    try {
+      const {content, usedModel, totalAttempts} = await callLlm(messages, typeof model === 'string' && model ? model : null);
+      const parsed = extractJsonObject(content);
+      const cases = parsed ? validCases(parsed.cases) : null;
+      if (!parsed || typeof parsed.readme !== 'string' || !parsed.readme.trim() || !cases) {
+        appendAiCall({
+          ts: new Date().toISOString(), status: 'error', model: usedModel, language: 'markdown',
+          instruction: 'admin-leetcode-generate', context: null, history: null, code: '',
+          rawResponse: content, reply: null, syntax: null,
+          error: `The model did not return the expected JSON (after ${totalAttempts} attempt(s)).`, durationMs: Date.now() - startedAt,
+        });
+        return res.status(502).json({message: 'The model did not return the expected JSON. Try again, or save the fetched markdown as-is.'});
+      }
+      appendAiCall({
+        ts: new Date().toISOString(), status: 'ok', model: usedModel, language: 'markdown',
+        instruction: 'admin-leetcode-generate', context: null, history: null, code: '',
+        rawResponse: content, reply: {code: '', explanation: `Generated README + ${cases.length} cases for ${title}`, changed: false},
+        syntax: null, error: null, durationMs: Date.now() - startedAt,
+      });
+      return res.json({
+        readme: parsed.readme,
+        entry: typeof parsed.entry === 'string' ? parsed.entry : '',
+        cases,
+        model: usedModel,
+      });
+    } catch (error) {
+      const status = (error as any).status || 502;
+      appendAiCall({
+        ts: new Date().toISOString(), status: status === 503 ? 'not_configured' : 'error', model: null, language: 'markdown',
+        instruction: 'admin-leetcode-generate', context: null, history: null, code: '',
+        rawResponse: null, reply: null, syntax: null, error: (error as Error).message, durationMs: Date.now() - startedAt,
+      });
+      return res.status(status).json({message: (error as Error).message});
+    }
+  };
+
+  // Saves an imported problem (create or full replace by slug),
+  // with the tags the user picked and the files assembled by the
+  // import flow (README, starter code per language, tests.json).
+  saveProblem = (req: express.Request, res: express.Response) => {
+    const body = req.body || {};
+    const root = rootOf(body.source) || 'leetcode';
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    if (!title || title.length > 200) return res.status(400).json({message: 'A problem title (up to 200 chars) is required.'});
+    const tags = Array.isArray(body.tags) ? body.tags.filter((tag: any) => typeof tag === 'string' && tag.trim()).map((tag: string) => tag.trim().slice(0, 100)) : [];
+    if (!tags.length) return res.status(400).json({message: 'Pick at least one category (tag) for the problem.'});
+    if (!Array.isArray(body.files) || !body.files.length) return res.status(400).json({message: 'The problem needs at least one file (its README).'});
+    const files: ProblemFile[] = [];
+    let total = 0;
+    for (const file of body.files) {
+      if (!file || typeof file.name !== 'string' || !file.name || file.name.includes('/') || file.name.length > 120 || typeof file.content !== 'string') {
+        return res.status(400).json({message: 'Every file needs a valid name and string content.'});
+      }
+      total += file.content.length;
+      if (total > 4 * 1024 * 1024) return res.status(400).json({message: 'Files are too large in total (over 4 MB).'});
+      files.push({name: file.name, content: file.content});
+    }
+    if (body.tests && typeof body.tests === 'object') {
+      const cases = validCases(body.tests.cases);
+      if (cases && cases.length) {
+        const testsJson = JSON.stringify({entry: typeof body.tests.entry === 'string' ? body.tests.entry : '', cases}, null, 2);
+        const existing = files.findIndex(file => file.name === 'tests.json');
+        if (existing >= 0) files[existing] = {name: 'tests.json', content: testsJson};
+        else files.push({name: 'tests.json', content: testsJson});
+      }
+    }
+    const problem = saveImportedProblem({root, title, tags, files});
+    this.server.hierarchy.refresh();
+    return res.json({ok: true, id: problem.id, slug: problem.slug});
   };
 
   getAiCalls = (req: express.Request, res: express.Response) => {

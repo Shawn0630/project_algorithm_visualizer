@@ -7,7 +7,7 @@ import compression from 'compression';
 import { __PROD__, credentials, httpPort, httpsPort, webhookOptions } from 'config/environments';
 import http from 'http';
 import https from 'https';
-import { Hierarchy } from 'models';
+import { DbHierarchy } from 'models';
 import * as Tracers from 'tracers';
 import { errorHandlerMiddleware, frontendMiddleware, redirectMiddleware } from 'middlewares';
 import { execute, pull } from 'utils/misc';
@@ -17,7 +17,7 @@ const Webhook = require('express-github-webhook');
 
 export default class Server {
   private readonly app = express();
-  readonly hierarchy = new Hierarchy();
+  readonly hierarchy = new DbHierarchy();
   readonly tracers = Object.values(Tracers).map(Tracer => new Tracer());
   private readonly webhook = webhookOptions && Webhook(webhookOptions);
 

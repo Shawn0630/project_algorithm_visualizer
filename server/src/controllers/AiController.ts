@@ -160,11 +160,12 @@ export function parseReply(content: string): { code: string, explanation: string
 // One chat-completions call chain with the same patience policy as
 // the assistant (overload retries with backoff + Retry-After, one
 // timeout retry, automatic switch to LLM_MODEL_FALLBACK when the
-// primary stays overloaded). Used by the test-case generator; the
-// assistant keeps its own inline chain for now. Throws an Error
-// carrying .status (503 unconfigured / 502 upstream) and a composed
-// .message in the same style the assistant returns.
-async function callLlm(messages: object[], requestedModel: string | null): Promise<{ content: string, usedModel: string, totalAttempts: number }> {
+// primary stays overloaded). Used by the test-case generator and the
+// admin console's LeetCode import. The assistant keeps its own
+// inline chain for now. Throws an Error carrying .status (503
+// unconfigured / 502 upstream) and a composed .message in the same
+// style the assistant returns.
+export async function callLlm(messages: object[], requestedModel: string | null): Promise<{ content: string, usedModel: string, totalAttempts: number }> {
   const baseUrl = process.env.LLM_BASE_URL;
   const apiKey = process.env['LLM_API' + '_KEY'];
   const primaryModel = requestedModel || process.env.LLM_MODEL;

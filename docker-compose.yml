@@ -1,0 +1,29 @@
+# Run the whole app as one container:
+#
+#   docker compose up --build      # then open http://localhost:8088
+#
+# - The image seeds its database from the bundled algorithms/
+#   content on first start; the LeetCode section starts empty and
+#   grows through the admin console's LeetCode import
+#   (http://localhost:8088/api/admin).
+# - All data (SQLite database with problems + your per-category
+#   code, AI call log) persists in the av-data volume across image
+#   rebuilds and upgrades.
+# - LLM settings come from server/.env (the same file the native
+#   setup uses: LLM_BASE_URL / LLM_API_KEY / LLM_MODEL /
+#   LLM_MODEL_FALLBACK). The file is read at runtime only - it is
+#   never baked into the image.
+services:
+  app:
+    build: .
+    ports:
+      - "8088:8088"
+    volumes:
+      - av-data:/app/server/data
+    env_file:
+      - path: ./server/.env
+        required: false
+    restart: unless-stopped
+
+volumes:
+  av-data:

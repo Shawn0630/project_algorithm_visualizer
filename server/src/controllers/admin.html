@@ -37,6 +37,8 @@
   pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; max-height:40vh; white-space:pre-wrap; word-break:break-word; font-size:12px; }
   .detail h3 { margin:14px 0 6px; font-size:13px; }
   .hidden { display:none; }
+  input[type=text] { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 10px; font:inherit; }
+  .tagopt { display:block; padding:2px 4px; cursor:pointer; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -45,6 +47,7 @@
   <span class="warn">No authentication - local / intranet use only, do not expose publicly</span>
   <div class="tabs">
     <button id="tabContent" class="active">Content</button>
+    <button id="tabImport">Import from LeetCode</button>
     <button id="tabAi">AI Call Log</button>
   </div>
 </header>
@@ -54,10 +57,10 @@
       <span>Source:</span>
       <button id="srcAlgorithms" class="active">Algorithms</button>
       <button id="srcLeetcode">LeetCode</button>
-      <button id="btnRefresh">Refresh (reload from disk)</button>
-      <button id="btnRepull">Re-pull (git)</button>
+      <button id="btnRefresh">Refresh</button>
+      <button id="btnRepull">Re-seed Algorithms</button>
       <button id="btnNewAlgo" class="primary">New Algorithm</button>
-      <span class="note">Edits are saved to the working copy and take effect immediately; they are not committed to git and the next pull overwrites them. For durable changes, commit to the matching repository on the LAN git server.</span>
+      <span class="note">Content is stored in the server database (server/data/visualizer.db); edits are durable and take effect immediately. A problem can appear in several categories (tags): its statement and files are shared, but each category keeps its own code session. Creating an algorithm with the name of an existing problem (in another category) just adds it to this category too.</span>
     </div>
     <div class="layout">
       <div class="tree" id="tree"></div>
@@ -69,9 +72,39 @@
           <button id="btnSave" class="primary">Save</button>
           <button id="btnNewFile">New File</button>
           <button id="btnDeleteFile" class="danger">Delete File</button>
-          <button id="btnDeleteAlgo" class="danger">Delete Algorithm</button>
+          <button id="btnDeleteAlgo" class="danger">Remove from category</button>
           <span class="note" id="saveStatus"></span>
         </div>
+      </div>
+    </div>
+  </section>
+  <section id="viewImport" class="hidden">
+    <div class="toolbar">
+      <span>LeetCode problem URL or slug:</span>
+      <input id="lcInput" type="text" style="flex:1; min-width:260px" placeholder="https://leetcode.com/problems/two-sum/  or  two-sum"/>
+      <button id="btnFetch" class="primary">Fetch</button>
+      <button id="btnAiFormat">Format with AI (+ test cases)</button>
+      <span class="note" id="importStatus"></span>
+    </div>
+    <div class="note" id="importMeta" style="margin-bottom:8px"></div>
+    <div class="layout">
+      <div class="editor">
+        <div class="path">Title (as shown in the app)</div>
+        <input id="impTitle" type="text" style="width:100%"/>
+        <div class="path" style="margin-top:10px">README.md - the statement (Markdown; the AI pass rewrites this)</div>
+        <textarea id="impReadme" style="height:36vh" placeholder="Fetch a problem first"></textarea>
+        <div class="path" style="margin-top:10px">Test cases (JSON from the AI pass, editable: {"entry": "...", "cases": [{"name": "...", "args": [...], "expected": ...}]})</div>
+        <textarea id="impTests" style="height:15vh" placeholder="(optional - run Format with AI to generate)"></textarea>
+      </div>
+      <div class="tree" style="width:290px">
+        <div class="cat">Starter files (from LeetCode)</div>
+        <div id="impFiles" class="note">(fetch a problem first)</div>
+        <div class="cat" style="margin-top:12px">Categories (tags)</div>
+        <div id="impTags"><span class="note">(loading)</span></div>
+        <input id="impNewTags" type="text" style="width:100%; margin-top:6px" placeholder="New tags, comma separated"/>
+        <div class="note" style="margin-top:6px">The problem appears in every picked category. Statement and files are shared; each category keeps its own code session for it.</div>
+        <button id="btnSaveProblem" class="primary" style="margin-top:10px">Save problem</button>
+        <div class="note" id="saveImportStatus" style="margin-top:6px"></div>
       </div>
     </div>
   </section>
@@ -145,7 +178,16 @@ async function selectFile(file) {
 $('srcAlgorithms').onclick = () => { source = 'algorithms'; sel = {category:null, algorithm:null, file:null}; $('srcAlgorithms').classList.add('active'); $('srcLeetcode').classList.remove('active'); renderTree(); renderFiles(); };
 $('srcLeetcode').onclick = () => { source = 'leetcode'; sel = {category:null, algorithm:null, file:null}; $('srcLeetcode').classList.add('active'); $('srcAlgorithms').classList.remove('active'); renderTree(); renderFiles(); };
 $('btnRefresh').onclick = async () => { await api('POST', '/api/admin/content/refresh'); await loadContent(); };
-$('btnRepull').onclick = async () => { $('btnRepull').textContent = 'Pulling (may take a while)...'; try { await api('POST', '/api/admin/content/repull'); await loadContent(); } finally { $('btnRepull').textContent = 'Re-pull (git)'; } };
+$('btnRepull').onclick = async () => {
+  if (!confirm('Re-seed replaces every seed problem with the bundled algorithms/ content from this install. Imported problems are not touched. Continue?')) return;
+  $('btnRepull').textContent = 'Seeding...';
+  try {
+    const {count} = await api('POST', '/api/admin/content/repull');
+    await loadContent();
+    $('saveStatus').textContent = `Re-seeded ${count} algorithm problems ✓`;
+  } catch (e) { $('saveStatus').textContent = 'Re-seed failed: ' + e.message; }
+  finally { $('btnRepull').textContent = 'Re-seed Algorithms'; }
+};
 $('btnNewAlgo').onclick = async () => {
   const category = prompt('Category name (may be new):'); if (!category) return;
   const name = prompt('Algorithm name:'); if (!name) return;
@@ -170,11 +212,12 @@ $('btnDeleteFile').onclick = async () => {
   await loadContent(); selectAlgorithm(sel.category, sel.algorithm);
 };
 $('btnDeleteAlgo').onclick = async () => {
-  if (!sel.algorithm || !confirm(`Delete algorithm ${sel.algorithm} (with all its files)?`)) return;
+  if (!sel.algorithm || !confirm(`Remove ${sel.algorithm} from the category "${sel.category}"? The problem itself is deleted only if this is its last category.`)) return;
   const q = new URLSearchParams({source, category: sel.category, algorithm: sel.algorithm});
-  await api('DELETE', '/api/admin/content/algorithm?' + q);
+  const {deleted} = await api('DELETE', '/api/admin/content/algorithm?' + q);
   sel = {category: null, algorithm: null, file: null};
-  await loadContent(); renderFiles(); $('fileEditor').value = ''; $('currentPath').textContent = 'Select an algorithm on the left';
+  await loadContent(); renderFiles(); $('fileEditor').value = '';
+  $('currentPath').textContent = deleted ? 'Problem deleted (it had no other category)' : 'Removed from this category';
 };
 
 // ---------- AI call log ----------
@@ -208,9 +251,115 @@ $('btnModels').onclick = async () => {
   }
 };
 
+// ---------- LeetCode import ----------
+const FILE_BY_LANG = {python3: 'code.py', python: 'code.py', java: 'code.java', javascript: 'code.js', cpp: 'main.cpp'};
+let imp = {fetched: null, starterFiles: []};
+
+async function loadImpTags(preselect) {
+  try {
+    const {tags} = await api('GET', '/api/admin/tags?source=leetcode');
+    $('impTags').innerHTML = tags.map(t =>
+      `<label class="tagopt"><input type="checkbox" value="${esc(t)}" ${preselect && preselect.includes(t) ? 'checked' : ''}/> ${esc(t)}</label>`).join('') || '<span class="note">(none yet - add below)</span>';
+  } catch (e) {
+    $('impTags').innerHTML = '<span class="note">Failed to load tags</span>';
+  }
+}
+$('btnFetch').onclick = async () => {
+  const input = $('lcInput').value.trim();
+  if (!input) return;
+  $('importStatus').textContent = 'Fetching from LeetCode...';
+  $('btnFetch').disabled = true;
+  try {
+    const data = await api('POST', '/api/admin/leetcode/fetch', {input});
+    imp.fetched = data;
+    $('impTitle').value = (data.frontendId ? data.frontendId + '. ' : '') + data.title;
+    $('impReadme').value = data.markdown;
+    $('impTests').value = '';
+    imp.starterFiles = [];
+    const seen = {};
+    const lines = [];
+    (data.snippets || []).forEach(s => {
+      const fileName = FILE_BY_LANG[s.langSlug];
+      if (!fileName) { lines.push(`${esc(s.lang)} - skipped (no matching pad type)`); return; }
+      if (seen[fileName]) { lines.push(`${esc(s.lang)} - skipped (duplicate of ${esc(fileName)})`); return; }
+      seen[fileName] = true;
+      imp.starterFiles.push({name: fileName, content: s.code});
+      lines.push(`${esc(fileName)} - ${esc(s.lang)} (${s.code.length} chars)`);
+    });
+    $('impFiles').innerHTML = lines.join('<br/>') || '(no starter snippets)';
+    $('importMeta').textContent = `${data.title} · ${data.difficulty} · LeetCode topics: ${(data.topics || []).join(', ') || '(none)'}`;
+    await loadImpTags(data.topics || []);
+    const extraTopics = (data.topics || []).filter(t => ![...document.querySelectorAll('#impTags input')].some(i => i.value === t));
+    $('impNewTags').value = extraTopics.join(', ');
+    $('importStatus').textContent = 'Fetched ✓ Now Format with AI (or edit and save as-is).';
+  } catch (e) {
+    $('importStatus').textContent = 'Fetch failed: ' + e.message;
+  } finally {
+    $('btnFetch').disabled = false;
+  }
+};
+$('btnAiFormat').onclick = async () => {
+  if (!imp.fetched) { $('importStatus').textContent = 'Fetch a problem first.'; return; }
+  $('importStatus').textContent = 'Asking the AI to format (this can take a while)...';
+  $('btnAiFormat').disabled = true;
+  try {
+    const model = localStorage.getItem('av-ai-model-v1') || undefined;
+    const data = await api('POST', '/api/admin/leetcode/generate', {
+      title: $('impTitle').value.trim(),
+      markdown: imp.fetched.markdown,
+      exampleTestcases: imp.fetched.exampleTestcases,
+      model,
+    });
+    $('impReadme').value = data.readme;
+    $('impTests').value = JSON.stringify({entry: data.entry, cases: data.cases}, null, 2);
+    $('importStatus').textContent = `AI formatted ✓ (${esc(data.model || 'model')}) - ${data.cases.length} test cases. Pick categories and Save.`;
+  } catch (e) {
+    $('importStatus').textContent = 'AI format failed: ' + e.message;
+  } finally {
+    $('btnAiFormat').disabled = false;
+  }
+};
+$('btnSaveProblem').onclick = async () => {
+  const title = $('impTitle').value.trim();
+  if (!title) { $('saveImportStatus').textContent = 'A title is required.'; return; }
+  const readme = $('impReadme').value;
+  if (!readme.trim()) { $('saveImportStatus').textContent = 'The README is empty.'; return; }
+  const tags = [...document.querySelectorAll('#impTags input:checked')].map(i => i.value)
+    .concat($('impNewTags').value.split(',').map(s => s.trim()).filter(Boolean));
+  if (!tags.length) { $('saveImportStatus').textContent = 'Pick or add at least one category.'; return; }
+  let tests = null;
+  const testsText = $('impTests').value.trim();
+  if (testsText) {
+    try { tests = JSON.parse(testsText); } catch (e) { $('saveImportStatus').textContent = 'Test cases JSON is invalid: ' + e.message; return; }
+  }
+  const files = [{name: 'README.md', content: readme}].concat(imp.starterFiles.filter(f => f.name !== 'README.md'));
+  $('btnSaveProblem').disabled = true;
+  try {
+    const {slug} = await api('POST', '/api/admin/problems', {source: 'leetcode', title, tags, files, tests});
+    $('saveImportStatus').innerHTML = `Saved ✓ Slug: ${esc(slug)} - find it under the Leetcode tab in the picked categories.`;
+    $('importStatus').textContent = '';
+    await loadContent(); await loadImpTags(tags);
+  } catch (e) {
+    $('saveImportStatus').textContent = 'Save failed: ' + e.message;
+  } finally {
+    $('btnSaveProblem').disabled = false;
+  }
+};
+loadImpTags();
+
 // ---------- Tabs ----------
-$('tabContent').onclick = () => { $('viewContent').classList.remove('hidden'); $('viewAi').classList.add('hidden'); $('tabContent').classList.add('active'); $('tabAi').classList.remove('active'); };
-$('tabAi').onclick = () => { $('viewAi').classList.remove('hidden'); $('viewContent').classList.add('hidden'); $('tabAi').classList.add('active'); $('tabContent').classList.remove('active'); loadCalls(); };
+function showTab(which) {
+  $('viewContent').classList.toggle('hidden', which !== 'content');
+  $('viewImport').classList.toggle('hidden', which !== 'import');
+  $('viewAi').classList.toggle('hidden', which !== 'ai');
+  $('tabContent').classList.toggle('active', which === 'content');
+  $('tabImport').classList.toggle('active', which === 'import');
+  $('tabAi').classList.toggle('active', which === 'ai');
+  if (which === 'ai') loadCalls();
+}
+$('tabContent').onclick = () => showTab('content');
+$('tabImport').onclick = () => showTab('import');
+$('tabAi').onclick = () => showTab('ai');
 
 loadContent();
 </script>

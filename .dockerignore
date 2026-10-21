@@ -1,0 +1,10 @@
+.git
+**/node_modules
+web/build
+server/public
+server/data
+server/.env
+**/*.log
+.dockerignore
+Dockerfile
+docker-compose.yml
