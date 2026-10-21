@@ -6,14 +6,41 @@ import styles from './VisualizationViewer.module.scss';
 import * as TracerClasses from 'core/tracers';
 import * as LayoutClasses from 'core/layouts';
 import { classes, extension } from 'common/util';
-
-const CODE_EXTS = ['js', 'java', 'py', 'cpp', 'json'];
+import { TracerApi } from 'apis';
 
 class VisualizationViewer extends BaseComponent {
   constructor(props) {
     super(props);
 
+    this.state = { docFile: null, closedDocs: [] };
     this.reset();
+  }
+
+  pageKey() {
+    const { algorithm, scratchPaper } = this.props.current;
+    return algorithm ? `${algorithm.categoryKey}/${algorithm.algorithmKey}` :
+      scratchPaper ? `scratch:${scratchPaper.gistId}` : 'home';
+  }
+
+  // Markdown tabs can be closed (per page): closing hides the tab -
+  // the file itself is untouched, and switching pages or reloading
+  // brings the tabs back.
+  visibleMdFiles() {
+    const { files } = this.props.current;
+    return (files || []).filter(file => extension(file.name) === 'md' &&
+      !this.state.closedDocs.includes(`${this.pageKey()}:${file.name}`));
+  }
+
+  closeDoc(event, file) {
+    event.stopPropagation();
+    const key = `${this.pageKey()}:${file.name}`;
+    this.setState(prev => ({ closedDocs: [...prev.closedDocs, key] }));
+    if (this.state.docFile && this.state.docFile.name === file.name) {
+      this.setState({ docFile: null });
+      const { chunks, cursor } = this.props.player;
+      this.reset();
+      if (chunks && chunks.length) this.update(chunks, cursor, [], 0);
+    }
   }
 
   reset() {
@@ -27,6 +54,23 @@ class VisualizationViewer extends BaseComponent {
   }
 
   componentWillReceiveProps(nextProps) {
+    // While a Markdown doc is shown, the viewer is decoupled from the
+    // player: builds and cursor moves in the code pad do not touch
+    // it. Only follow the doc itself (deleted -> leave doc mode,
+    // edited elsewhere -> re-render it).
+    const docFile = this.state.docFile;
+    if (docFile) {
+      const fresh = (nextProps.current.files || []).find(file => file.name === docFile.name);
+      if (!fresh) {
+        this.setState({ docFile: null });
+        const { chunks, cursor } = nextProps.player;
+        this.reset();
+        this.update(chunks, cursor, [], 0);
+      } else if (fresh.content !== docFile.content) {
+        this.showDoc(fresh);
+      }
+      return;
+    }
     const { chunks, cursor } = nextProps.player;
     const { chunks: oldChunks, cursor: oldCursor } = this.props.player;
     if (chunks !== oldChunks || cursor !== oldCursor) {
@@ -81,39 +125,52 @@ class VisualizationViewer extends BaseComponent {
     chunk.commands.forEach(command => this.applyCommand(command));
   }
 
-  // Markdown files render here, not in the code pad: the viewer gets
-  // a tab per Markdown file next to the Visualization tab. Selecting
-  // one makes it the editing file, which the app auto-builds into
-  // this viewer (MarkdownTracer); the Visualization tab switches back
-  // to the first code file.
+  // Markdown files render here, in the center viewer, fully
+  // independent of the code pad: switching tabs never changes the
+  // pad's editing file, and editing or running code never disturbs
+  // the doc being read. The doc is rendered locally through the same
+  // MarkdownTracer pipeline the build uses.
+  showDoc(file) {
+    TracerApi.md({ code: file.content }).then(commands => {
+      this.reset();
+      this.applyChunk({ commands });
+      this.props.setLineIndicator(undefined);
+      this.setState({ docFile: file });
+    });
+  }
+
   showVisualization() {
-    const { files, editingFile } = this.props.current;
-    if (!editingFile || extension(editingFile.name) !== 'md') return;
-    const firstCode = files.find(file => CODE_EXTS.includes(extension(file.name)));
-    if (firstCode) this.props.setEditingFile(firstCode);
+    if (!this.state.docFile) return;
+    this.setState({ docFile: null });
+    const { chunks, cursor } = this.props.player;
+    this.reset();
+    if (chunks && chunks.length) this.update(chunks, cursor, [], 0);
   }
 
   render() {
     const { className } = this.props;
-    const { files, editingFile } = this.props.current;
-    const mdFiles = (files || []).filter(file => extension(file.name) === 'md');
-    const activeMd = editingFile && extension(editingFile.name) === 'md' ? editingFile : null;
+    const mdFiles = this.visibleMdFiles();
+    const docFile = this.state.docFile;
 
     return (
       <div className={classes(styles.visualization_viewer, className)}>
         {
           mdFiles.length ? (
             <div className={styles.doc_tabs}>
-              <div className={classes(styles.doc_tab, !activeMd && styles.selected)}
+              <div className={classes(styles.doc_tab, !docFile && styles.selected)}
                    onClick={() => this.showVisualization()}>
                 Visualization
               </div>
               {
                 mdFiles.map(file => (
                   <div key={file.name}
-                       className={classes(styles.doc_tab, activeMd === file && styles.selected)}
-                       onClick={() => this.props.setEditingFile(file)}>
+                       className={classes(styles.doc_tab, docFile && docFile.name === file.name && styles.selected)}
+                       onClick={() => this.showDoc(file)}>
                     {file.name}
+                    <span className={styles.doc_close} title="Close this tab"
+                          onClick={event => this.closeDoc(event, file)}>
+                      ×
+                    </span>
                   </div>
                 ))
               }
