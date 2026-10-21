@@ -335,7 +335,10 @@ export class AiController extends Controller {
       const upstream = (data && data.error && data.error.message)
         || (data && typeof data.message === 'string' && data.message)
         || (status === 503 ? 'the provider reports the model is overloaded (503, high demand)' : null);
-      const message = `LLM call failed: ${upstream || (error && error.message) || 'unknown error'}${totalAttempts > 1 ? ` (after ${totalAttempts} attempts)` : ''}`;
+      const hint = status === 404
+        ? ` - model "${usedModel}" was not found (404): the id is wrong or unavailable to this API key; Admin -> AI Call Log -> "List models my key can use" shows the exact ids`
+        : '';
+      const message = `LLM call failed: ${upstream || (error && error.message) || 'unknown error'}${hint}${totalAttempts > 1 ? ` (after ${totalAttempts} attempts)` : ''}`;
       logCall({status: 'error', error: message});
       return res.status(502).json({message});
     }

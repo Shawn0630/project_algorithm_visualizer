@@ -78,8 +78,10 @@
   <section id="viewAi" class="hidden">
     <div class="toolbar">
       <button id="btnReloadCalls">Reload</button>
+      <button id="btnModels">List models my key can use</button>
       <span class="note">Full record of every AI assistant call: the input sent to the model, its raw response, the parsed reply and the syntax check. Stored in server/data/ai-calls.jsonl (not in git).</span>
     </div>
+    <div class="detail" id="modelList"></div>
     <table>
       <thead><tr><th>Time</th><th>Status</th><th>Model</th><th>Language</th><th>Instruction</th><th>Syntax</th><th>Duration</th></tr></thead>
       <tbody id="callRows"></tbody>
@@ -194,6 +196,17 @@ async function loadCalls() {
   }));
 }
 $('btnReloadCalls').onclick = loadCalls;
+$('btnModels').onclick = async () => {
+  $('modelList').innerHTML = '<p class="note">Asking the provider...</p>';
+  try {
+    const {models, configured} = await api('GET', '/api/admin/llm-models');
+    $('modelList').innerHTML = '<h3>Models available to your API key</h3>' +
+      `<p class="note">Configured now: LLM_MODEL = ${esc(configured.model || '(unset)')} · LLM_MODEL_FALLBACK = ${esc(configured.fallback || '(unset)')}. Copy an id below verbatim into server/.env.</p>` +
+      `<pre>${esc(models.join('\n') || '(none returned)')}</pre>`;
+  } catch (e) {
+    $('modelList').innerHTML = `<p class="bad">${esc(e.message)}</p>`;
+  }
+};
 
 // ---------- Tabs ----------
 $('tabContent').onclick = () => { $('viewContent').classList.remove('hidden'); $('viewAi').classList.add('hidden'); $('tabContent').classList.add('active'); $('tabAi').classList.remove('active'); };
