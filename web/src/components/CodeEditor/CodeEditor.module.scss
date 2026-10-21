@@ -136,6 +136,28 @@
       }
     }
 
+    .local_copy {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 28px;
+      padding: 0 8px;
+      opacity: .85;
+      white-space: nowrap;
+
+      .restore {
+        padding: 2px 10px;
+        border: 1px solid $color-border;
+        border-radius: 999px;
+        cursor: pointer;
+        white-space: nowrap;
+
+        &:hover {
+          background-color: $color-overlay;
+        }
+      }
+    }
+
     .contributor {
       height: 28px;
       padding: 0 6px;

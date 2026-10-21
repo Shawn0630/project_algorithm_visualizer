@@ -1,0 +1,9 @@
+/**
+ * @param {string} s
+ * @return {number}
+ */
+var minOperations = function (s) {
+  // Write your solution here, then run the test cases in the
+  // Testcase panel below the code pad.
+  return -1;
+};

@@ -1,0 +1,249 @@
+@import "~common/stylesheet/index";
+
+// LeetCode-style testcase card: a separate rounded panel under the
+// editor, a Testcase / Test Result tab header, pill case chips, and
+// "name =" labels over full-width rounded value boxes.
+.test_panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 6px;
+  background-color: $theme-normal;
+  border: 1px solid $color-border;
+  border-radius: 8px;
+  overflow: hidden;
+  user-select: text;
+
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border-bottom: 1px solid $color-border;
+
+    .tab {
+      padding: 4px 10px;
+      border-radius: 6px;
+      opacity: .6;
+      cursor: pointer;
+      white-space: nowrap;
+
+      &:hover {
+        background-color: $color-overlay;
+        opacity: .9;
+      }
+    }
+
+    .tab_active {
+      opacity: 1;
+      font-weight: 600;
+    }
+
+    .spacer {
+      flex: 1;
+    }
+
+    .code_label {
+      opacity: .55;
+      font-family: $font-family-monospace;
+      white-space: nowrap;
+      margin-right: 4px;
+    }
+
+    .run {
+      padding: 4px 16px;
+      background-color: $color-active;
+      color: #06280f;
+      font-weight: bold;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+
+      &:disabled {
+        opacity: .5;
+        cursor: default;
+      }
+    }
+
+    .chevron {
+      padding: 4px 8px;
+      cursor: pointer;
+      opacity: .7;
+    }
+  }
+
+  .body {
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 10px 16px 14px;
+  }
+
+  // Case chips, like LeetCode's: quiet pills, the active one lit,
+  // a small round x badge on the active chip, then a bare +.
+  .chips {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 4px;
+    margin-bottom: 4px;
+
+    .chip {
+      position: relative;
+      padding: 6px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+      opacity: .65;
+
+      &:hover {
+        background-color: $color-overlay;
+        opacity: 1;
+      }
+
+      .chip_x {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        width: 15px;
+        height: 15px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background-color: $theme-light;
+        border: 1px solid $color-border;
+        font-size: 10px;
+        line-height: 1;
+
+        &:hover {
+          color: #ff8080;
+        }
+      }
+    }
+
+    .chip_active {
+      background-color: $theme-light;
+      opacity: 1;
+      font-weight: 600;
+
+      &:hover {
+        background-color: $theme-light;
+      }
+    }
+
+    .chip_add {
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 16px;
+      opacity: .6;
+
+      &:hover {
+        opacity: 1;
+      }
+    }
+
+    .dot_ok {
+      color: $color-active;
+    }
+
+    .dot_bad {
+      color: #ff6060;
+    }
+  }
+
+  // "s =" style labels over full-width value boxes.
+  .field_label {
+    opacity: .55;
+    margin: 12px 0 6px;
+    font-family: $font-family-monospace;
+  }
+
+  .value_input, .value_box {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    background-color: $theme-light;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font-family: $font-family-monospace;
+    font-size: $font-size-normal;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .value_input {
+    resize: vertical;
+
+    &:focus {
+      border-color: $color-border;
+      outline: none;
+    }
+  }
+
+  .note {
+    margin-top: 12px;
+    opacity: .5;
+    line-height: 1.6;
+
+    code {
+      font-family: $font-family-monospace;
+    }
+  }
+
+  .hint {
+    opacity: .6;
+    line-height: 1.6;
+  }
+
+  .summary_ok {
+    color: $color-active;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .summary_bad {
+    color: #ff8080;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .result_case {
+    padding: 6px 0 10px;
+
+    & + .result_case {
+      border-top: 1px solid $color-border;
+    }
+
+    .result_name_ok {
+      color: $color-active;
+      font-weight: 600;
+    }
+
+    .result_name_bad {
+      color: #ff8080;
+      font-weight: 600;
+    }
+
+    .stdout {
+      margin-top: 8px;
+      opacity: .8;
+
+      pre {
+        white-space: pre-wrap;
+        font-family: $font-family-monospace;
+        font-size: $font-size-normal;
+      }
+    }
+  }
+
+  .error {
+    color: #ff8080;
+    white-space: pre-wrap;
+    font-family: $font-family-monospace;
+    font-size: $font-size-normal;
+    line-height: 1.5;
+    user-select: text;
+    margin-top: 8px;
+  }
+}

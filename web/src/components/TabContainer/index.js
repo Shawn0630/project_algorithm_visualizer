@@ -7,6 +7,7 @@ import faTimes from '@fortawesome/fontawesome-free-solid/faTimes';
 import { classes, extension, notifyAiSessionDeleted } from 'common/util';
 import { actions } from 'reducers';
 import { languages } from 'common/config';
+import TestPanel from 'components/TestPanel';
 import styles from './TabContainer.module.scss';
 
 class TabContainer extends React.Component {
@@ -103,6 +104,7 @@ class TabContainer extends React.Component {
         <div className={styles.content}>
           {children}
         </div>
+        <TestPanel/>
       </div>
     );
   }

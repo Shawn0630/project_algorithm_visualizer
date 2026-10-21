@@ -52,6 +52,10 @@ const AiApi = {
   models: GET('/ai/models'),
 };
 
+const TestApi = {
+  run: POST('/tests/run'),
+};
+
 const AlgorithmApi = {
   getCategories: GET('/algorithms'),
   getAlgorithm: GET('/algorithms/:categoryKey/:algorithmKey'),
@@ -112,6 +116,7 @@ const TracerApi = {
 
 export {
   AiApi,
+  TestApi,
   AlgorithmApi,
   VisualizationApi,
   GitHubApi,

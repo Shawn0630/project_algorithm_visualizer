@@ -4,6 +4,7 @@ import faUser from '@fortawesome/fontawesome-free-solid/faUser';
 import faCaretUp from '@fortawesome/fontawesome-free-solid/faCaretUp';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { classes, extension, notifyAiSessionDeleted } from 'common/util';
+import { hasLocalCopy, originalContent } from 'common/savedCode';
 import { actions } from 'reducers';
 import { connect } from 'react-redux';
 import { languages } from 'common/config';
@@ -153,6 +154,19 @@ class CodeEditor extends React.Component {
               </Button>
             ))
           } */}
+          {
+            isCode && hasLocalCopy(this.props.current, editingFile.name) ? (
+              <span className={styles.local_copy}>
+                Local copy saved
+                <button className={styles.restore} onClick={() => {
+                  const original = originalContent(this.props.current, editingFile.name);
+                  if (original !== undefined) this.props.modifyFile(editingFile, original);
+                }}>
+                  Restore original
+                </button>
+              </span>
+            ) : null
+          }
           <div className={styles.empty}>
             <div className={styles.empty}/>
             <Button className={styles.delete} icon={faTrashAlt} primary confirmNeeded

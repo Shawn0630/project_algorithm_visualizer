@@ -1,6 +1,7 @@
 import { combineActions, createAction, handleActions } from 'redux-actions';
 import { FEATURES_MD, LICENSE_MD } from 'files';
 import { extension, isSaved } from 'common/util';
+import { overlaySavedCode, persistCode, dropSavedCode, moveSavedCode, resetSavedCode } from 'common/savedCode';
 
 const prefix = 'CURRENT';
 
@@ -72,7 +73,11 @@ export default handleActions({
     setScratchPaper,
     setLicense,
   )]: (state, { payload }) => {
-    const { algorithm, scratchPaper, titles, files, description } = payload;
+    const { algorithm, scratchPaper, titles, description } = payload;
+    // The user's local copy of a pad (if any) wins over the shipped
+    // content; both files and lastFiles use the overlaid array, so a
+    // restored copy does not read as "unsaved".
+    const files = overlaySavedCode({ algorithm, scratchPaper }, payload.files);
     return {
       ...state,
       algorithm,
@@ -126,6 +131,15 @@ export default handleActions({
   )]: (state, { payload }) => {
     const { file, ...update } = payload;
     const editingFile = { ...file, ...update };
+    // Keep the pad's local code copy in step with the edit.
+    if (update.name !== undefined && update.content !== undefined) {
+      // replaceFile (language template): fresh start for the pad.
+      resetSavedCode(state, file.name, update.name, update.content);
+    } else if (update.name !== undefined) {
+      moveSavedCode(state, file.name, update.name);
+    } else if (update.content !== undefined) {
+      persistCode(state, file.name, update.content);
+    }
     const newState = {
       ...state,
       files: state.files.map(oldFile => oldFile === file ? editingFile : oldFile),
@@ -139,6 +153,7 @@ export default handleActions({
   },
   [deleteFile]: (state, { payload }) => {
     const { file } = payload;
+    dropSavedCode(state, file.name);
     const index = state.files.indexOf(file);
     const files = state.files.filter(oldFile => oldFile !== file);
     const editingFile = files[Math.min(index, files.length - 1)];

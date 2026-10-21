@@ -14,5 +14,6 @@ export { default as Player } from './Player';
 export { default as ProgressBar } from './ProgressBar';
 export { default as ResizableContainer } from './ResizableContainer';
 export { default as TabContainer } from './TabContainer';
+export { default as TestPanel } from './TestPanel';
 export { default as ToastContainer } from './ToastContainer';
 export { default as VisualizationViewer } from './VisualizationViewer';

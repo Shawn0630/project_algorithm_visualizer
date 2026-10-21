@@ -1,0 +1,1 @@
+{"cases":[{"args":["dog"],"expected":1,"name":"Case 1"},{"args":["card"],"expected":2,"name":"Case 2"},{"args":["abc"],"expected":0,"name":"Case 3"},{"args":["ba"],"expected":-1,"name":"Case 4"}],"entry":"minOperations"}
