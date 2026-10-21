@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -42,34 +42,34 @@
 <body>
 <header>
   <h1>Algorithm Visualizer · Admin</h1>
-  <span class="warn">无登录验证 — 仅限本地 / 内网使用，不要暴露到公网</span>
+  <span class="warn">No authentication - local / intranet use only, do not expose publicly</span>
   <div class="tabs">
-    <button id="tabContent" class="active">内容管理</button>
-    <button id="tabAi">AI 调用日志</button>
+    <button id="tabContent" class="active">Content</button>
+    <button id="tabAi">AI Call Log</button>
   </div>
 </header>
 <main>
   <section id="viewContent">
     <div class="toolbar">
-      <span>来源：</span>
+      <span>Source:</span>
       <button id="srcAlgorithms" class="active">Algorithms</button>
       <button id="srcLeetcode">LeetCode</button>
-      <button id="btnRefresh">刷新（重读磁盘）</button>
-      <button id="btnRepull">重新拉取（git）</button>
-      <button id="btnNewAlgo" class="primary">新建算法</button>
-      <span class="note">编辑保存在工作副本里，应用立即生效；不会自动提交 git — 下次拉取会被覆盖，长期修改请提交到局域网 git 服务器的对应仓库。</span>
+      <button id="btnRefresh">Refresh (reload from disk)</button>
+      <button id="btnRepull">Re-pull (git)</button>
+      <button id="btnNewAlgo" class="primary">New Algorithm</button>
+      <span class="note">Edits are saved to the working copy and take effect immediately; they are not committed to git and the next pull overwrites them. For durable changes, commit to the matching repository on the LAN git server.</span>
     </div>
     <div class="layout">
       <div class="tree" id="tree"></div>
       <div class="editor">
-        <div class="path" id="currentPath">从左侧选择一个算法</div>
+        <div class="path" id="currentPath">Select an algorithm on the left</div>
         <div class="files" id="fileList"></div>
-        <textarea id="fileEditor" placeholder="选择文件后在这里编辑"></textarea>
+        <textarea id="fileEditor" placeholder="Select a file to edit it here"></textarea>
         <div class="toolbar" style="margin-top:10px">
-          <button id="btnSave" class="primary">保存</button>
-          <button id="btnNewFile">新建文件</button>
-          <button id="btnDeleteFile" class="danger">删除当前文件</button>
-          <button id="btnDeleteAlgo" class="danger">删除当前算法</button>
+          <button id="btnSave" class="primary">Save</button>
+          <button id="btnNewFile">New File</button>
+          <button id="btnDeleteFile" class="danger">Delete File</button>
+          <button id="btnDeleteAlgo" class="danger">Delete Algorithm</button>
           <span class="note" id="saveStatus"></span>
         </div>
       </div>
@@ -77,11 +77,11 @@
   </section>
   <section id="viewAi" class="hidden">
     <div class="toolbar">
-      <button id="btnReloadCalls">刷新</button>
-      <span class="note">每次 AI 助手调用的完整记录：发送给模型的 input、模型原始返回、解析结果与语法检查。日志在 server/data/ai-calls.jsonl（不进 git）。</span>
+      <button id="btnReloadCalls">Reload</button>
+      <span class="note">Full record of every AI assistant call: the input sent to the model, its raw response, the parsed reply and the syntax check. Stored in server/data/ai-calls.jsonl (not in git).</span>
     </div>
     <table>
-      <thead><tr><th>时间</th><th>状态</th><th>模型</th><th>语言</th><th>指令</th><th>语法</th><th>耗时</th></tr></thead>
+      <thead><tr><th>Time</th><th>Status</th><th>Model</th><th>Language</th><th>Instruction</th><th>Syntax</th><th>Duration</th></tr></thead>
       <tbody id="callRows"></tbody>
     </table>
     <div class="detail" id="callDetail"></div>
@@ -95,7 +95,7 @@ const api = (method, url, body) => fetch(url, {
   body: body ? JSON.stringify(body) : undefined,
 }).then(async r => { const data = await r.json().catch(() => ({})); if (!r.ok) throw new Error(data.message || r.status); return data; });
 
-// ---------- 内容管理 ----------
+// ---------- Content ----------
 let contentData = {algorithms: [], leetcode: []};
 let source = 'algorithms';
 let sel = {category: null, algorithm: null, file: null};
@@ -111,7 +111,7 @@ function renderTree() {
     `<div class="cat">${esc(cat.category)}</div>` + cat.algorithms.map(algo =>
       `<div class="algo ${sel.category === cat.category && sel.algorithm === algo.name ? 'sel' : ''}" data-cat="${esc(cat.category)}" data-algo="${esc(algo.name)}">${esc(algo.name)}</div>`
     ).join('')
-  ).join('') || '<div class="note">（空）</div>';
+  ).join('') || '<div class="note">(empty)</div>';
   tree.querySelectorAll('.algo').forEach(el => el.addEventListener('click', () => selectAlgorithm(el.dataset.cat, el.dataset.algo)));
 }
 function findAlgo() {
@@ -143,39 +143,39 @@ async function selectFile(file) {
 $('srcAlgorithms').onclick = () => { source = 'algorithms'; sel = {category:null, algorithm:null, file:null}; $('srcAlgorithms').classList.add('active'); $('srcLeetcode').classList.remove('active'); renderTree(); renderFiles(); };
 $('srcLeetcode').onclick = () => { source = 'leetcode'; sel = {category:null, algorithm:null, file:null}; $('srcLeetcode').classList.add('active'); $('srcAlgorithms').classList.remove('active'); renderTree(); renderFiles(); };
 $('btnRefresh').onclick = async () => { await api('POST', '/api/admin/content/refresh'); await loadContent(); };
-$('btnRepull').onclick = async () => { $('btnRepull').textContent = '拉取中（可能较久）…'; try { await api('POST', '/api/admin/content/repull'); await loadContent(); } finally { $('btnRepull').textContent = '重新拉取（git）'; } };
+$('btnRepull').onclick = async () => { $('btnRepull').textContent = 'Pulling (may take a while)...'; try { await api('POST', '/api/admin/content/repull'); await loadContent(); } finally { $('btnRepull').textContent = 'Re-pull (git)'; } };
 $('btnNewAlgo').onclick = async () => {
-  const category = prompt('分类名（可新建分类）:'); if (!category) return;
-  const name = prompt('算法名:'); if (!name) return;
+  const category = prompt('Category name (may be new):'); if (!category) return;
+  const name = prompt('Algorithm name:'); if (!name) return;
   await api('POST', '/api/admin/content/algorithm', {source, category, name});
   await loadContent(); selectAlgorithm(category, name);
 };
 $('btnSave').onclick = async () => {
   if (!sel.file) return;
   await api('PUT', '/api/admin/content/file', {source, category: sel.category, algorithm: sel.algorithm, file: sel.file, content: $('fileEditor').value});
-  $('saveStatus').textContent = '已保存 ✓';
+  $('saveStatus').textContent = 'Saved ✓';
 };
 $('btnNewFile').onclick = async () => {
   if (!sel.algorithm) return;
-  const name = prompt('文件名（如 Code.py / README.md）:'); if (!name) return;
+  const name = prompt('File name (e.g. Code.py / README.md):'); if (!name) return;
   await api('POST', '/api/admin/content/file', {source, category: sel.category, algorithm: sel.algorithm, name});
   await loadContent(); selectAlgorithm(sel.category, sel.algorithm); selectFile(name);
 };
 $('btnDeleteFile').onclick = async () => {
-  if (!sel.file || !confirm(`删除文件 ${sel.file}？`)) return;
+  if (!sel.file || !confirm(`Delete file ${sel.file}?`)) return;
   const q = new URLSearchParams({source, category: sel.category, algorithm: sel.algorithm, file: sel.file});
   await api('DELETE', '/api/admin/content/file?' + q);
   await loadContent(); selectAlgorithm(sel.category, sel.algorithm);
 };
 $('btnDeleteAlgo').onclick = async () => {
-  if (!sel.algorithm || !confirm(`删除算法 ${sel.algorithm}（含全部文件）？`)) return;
+  if (!sel.algorithm || !confirm(`Delete algorithm ${sel.algorithm} (with all its files)?`)) return;
   const q = new URLSearchParams({source, category: sel.category, algorithm: sel.algorithm});
   await api('DELETE', '/api/admin/content/algorithm?' + q);
   sel = {category: null, algorithm: null, file: null};
-  await loadContent(); renderFiles(); $('fileEditor').value = ''; $('currentPath').textContent = '从左侧选择一个算法';
+  await loadContent(); renderFiles(); $('fileEditor').value = ''; $('currentPath').textContent = 'Select an algorithm on the left';
 };
 
-// ---------- AI 调用日志 ----------
+// ---------- AI call log ----------
 async function loadCalls() {
   const {calls} = await api('GET', '/api/admin/ai-calls?limit=50');
   $('callRows').innerHTML = calls.map((c, i) => `<tr class="call" data-i="${i}">
@@ -183,14 +183,14 @@ async function loadCalls() {
     <td class="${c.status === 'ok' ? 'ok' : 'bad'}">${esc(c.status)}</td>
     <td>${esc(c.model || '-')}</td><td>${esc(c.language)}</td>
     <td>${esc((c.instruction || '').slice(0, 60))}</td>
-    <td>${c.syntax ? (c.syntax.ok ? '<span class="ok">通过</span>' : '<span class="bad">未通过</span>') : '-'}</td>
-    <td>${c.durationMs} ms</td></tr>`).join('') || '<tr><td colspan="7">暂无调用记录</td></tr>';
+    <td>${c.syntax ? (c.syntax.ok ? '<span class="ok">passed</span>' : '<span class="bad">failed</span>') : '-'}</td>
+    <td>${c.durationMs} ms</td></tr>`).join('') || '<tr><td colspan="7">No calls yet</td></tr>';
   $('callRows').querySelectorAll('tr.call').forEach(row => row.addEventListener('click', () => {
     const c = calls[Number(row.dataset.i)];
     $('callDetail').innerHTML =
-      `<h3>发送给模型的 input</h3><pre>${esc(JSON.stringify({model: c.model, language: c.language, context: c.context, history: c.history, instruction: c.instruction, code: c.code}, null, 2))}</pre>` +
-      `<h3>模型原始返回 (raw response)</h3><pre>${esc(c.rawResponse || '(无)')}</pre>` +
-      `<h3>解析结果 / 语法检查 / 错误</h3><pre>${esc(JSON.stringify({reply: c.reply, syntax: c.syntax, error: c.error}, null, 2))}</pre>`;
+      `<h3>Input sent to the model</h3><pre>${esc(JSON.stringify({model: c.model, language: c.language, context: c.context, history: c.history, instruction: c.instruction, code: c.code}, null, 2))}</pre>` +
+      `<h3>Raw model response</h3><pre>${esc(c.rawResponse || '(none)')}</pre>` +
+      `<h3>Parsed reply / syntax check / error</h3><pre>${esc(JSON.stringify({reply: c.reply, syntax: c.syntax, error: c.error}, null, 2))}</pre>`;
   }));
 }
 $('btnReloadCalls').onclick = loadCalls;

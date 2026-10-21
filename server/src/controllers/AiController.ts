@@ -3,6 +3,7 @@ import axios from 'axios';
 import { Controller } from 'controllers/Controller';
 import { appendAiCall } from 'utils/aiCallLog';
 import { checkSyntax } from 'utils/syntaxCheck';
+import { tracerReference } from 'utils/tracerDocs';
 import Server from 'Server';
 
 // AI coding assistant for the editor ("coding pad"). The frontend sends
@@ -14,29 +15,45 @@ import Server from 'Server';
 // LLM_API_KEY, LLM_MODEL. Without them the endpoint answers 503 so the
 // UI can say exactly what is missing instead of failing obscurely.
 
-const LANGUAGE_GUIDES: { [ext: string]: string } = {
-  js: `JavaScript (runs in the browser). Imports: const { Array1DTracer, Array2DTracer, ChartTracer, GraphTracer, LogTracer, Layout, HorizontalLayout, VerticalLayout, Tracer, Randomize } = require('algorithm-visualizer');
-Key methods: tracer.set(data); Array tracers: patch(x, y, value) / depatch, select / deselect (also selectRow / selectCol / deselectRow / deselectCol); ChartTracer is an Array1DTracer shown as bars; GraphTracer: directed(bool), weighted(bool), addNode(id, weight, x, y), addEdge(source, target, weight), visit(target, source), leave(target, source), layoutCircle(), layoutTree(root), layoutRandom(); LogTracer: print / println. Call Tracer.delay() after each visualized step, and Layout.setRoot(new VerticalLayout([tracerA, tracerB])) (or a single tracer) once before stepping.`,
-  java: `Java (compiled locally by the server). Imports: import org.algorithm_visualizer.*; The file must define class Main with public static void main(String[] args). Tracers: Array1DTracer, Array2DTracer, ChartTracer, GraphTracer, LogTracer - same method names as JavaScript (camelCase): set, patch, depatch, select, deselect, selectRow, selectCol, addNode, addEdge, visit, leave, layoutCircle, layoutTree, println. Call Tracer.delay() after each visualized step, and Layout.setRoot(new VerticalLayout(new Commander[]{tracerA, tracerB})) once before stepping.`,
-  py: `Python (runs locally on the server). Imports: from algorithm_visualizer import *. Tracers: Array1DTracer, Array2DTracer, ChartTracer, GraphTracer, LogTracer - snake_case methods: set, patch, depatch, select, deselect, select_row, select_col, add_node, add_edge, visit, leave, layout_circle, layout_tree, println (camelCase aliases also work). Call Tracer.delay() after each visualized step (it captures the line number automatically), and Layout.set_root(...) once before stepping.`,
-  cpp: `C++ (compiled in a local Docker container). Include: #include "algorithm-visualizer.h". Tracers: Array1DTracer, Array2DTracer, ChartTracer, GraphTracer, LogTracer - same method names as JavaScript: set, patch, depatch, select, deselect, selectRow, selectCol, addNode, addEdge, visit, leave, layoutCircle, layoutTree, println. Call Tracer::delay() after each visualized step, and set the root layout once before stepping, following the boilerplate already present in the file.`,
-};
-
 function systemPrompt(ext: string) {
-  const guide = LANGUAGE_GUIDES[ext] || LANGUAGE_GUIDES.js;
   return [
     'You are the coding assistant inside Algorithm Visualizer, an app that animates algorithms from code.',
     'You receive one source file and an instruction. Do the work and answer with ONLY a JSON object:',
-    '{"code": "<the COMPLETE revised file content>", "explanation": "<short explanation in Chinese>"}',
+    '{"code": "<the COMPLETE revised file content>", "explanation": "<short explanation in English>"}',
+    'Every reply ALWAYS carries both parts: the natural-language explanation AND the complete source code of the file after your changes, written in the same language as the input file. The UI renders a diff from your code against the current file, so completeness is a hard requirement, not a style preference.',
     'Rules:',
     '- code must be the entire file, ready to replace the old one - never a diff, never a snippet, never wrapped in markdown fences (the JSON carries it).',
+    '- NEVER elide anything: no "// ...", no "# ... rest unchanged", no 其余代码不变 / 保持不变 / 同上， no placeholders of any kind. Regions you do not change must be reproduced character-for-character, however long the file is.',
     '- Keep the file\'s existing boilerplate and section markers (// import visualization libraries { ... // }, // define tracer variables { ... // }, // visualize { ... // }) and its overall structure; change only what the instruction needs.',
     '- When asked to visualize / add tracers: instrument the algorithm with the tracer API below, call delay after each meaningful step, set the root layout once, and keep the algorithm logic itself unchanged.',
     '- If the instruction only asks for an explanation, return the code unchanged and put the explanation in the explanation field.',
     '- This is a continuing session for one code pad: earlier turns are included as conversation history. The file content in the latest user message is authoritative - the user may have hand-edited it, or accepted or rejected your earlier proposals.',
     '',
-    guide,
+    tracerReference(ext),
   ].join('\n');
+}
+
+// Detects a "lazy" reply: the model was told to return the complete
+// file, but models still elide unchanged regions with comments like
+// "// ... 其余不变" - and the diff UI would then read the elided part
+// as deleted code. Two signals: elision markers in comments, and a
+// suspicious length collapse versus the original file.
+const ELISION_WORDS = /(rest|remaining|unchanged|omitted|same as before|其余|剩余|未改|不变|省略|同上|略过|保持原样)/i;
+
+export function looksElided(code: string, original: string): boolean {
+  for (const line of code.split('\n')) {
+    const trimmed = line.trim();
+    // A line that is only an ellipsis comment: // ... / # ... / /* ... */
+    if (/^(\/\/|#|\/\*)\s*(\.\.\.|…)+\s*(\*\/)?$/.test(trimmed)) return true;
+    // A comment carrying both an ellipsis and an elision word.
+    const commentAt = Math.max(trimmed.indexOf('//'), trimmed.indexOf('#'), trimmed.indexOf('/*'));
+    if (commentAt >= 0) {
+      const comment = trimmed.slice(commentAt);
+      if (/(\.\.\.|…)/.test(comment) && ELISION_WORDS.test(comment)) return true;
+    }
+  }
+  if (original.length > 400 && code.length < original.length * 0.45) return true;
+  return false;
 }
 
 function parseReply(content: string): { code: string, explanation: string } {
@@ -73,7 +90,7 @@ export class AiController extends Controller {
   assist = async (req: express.Request, res: express.Response) => {
     const {code, language, instruction, history, context} = req.body;
     if (typeof code !== 'string' || typeof instruction !== 'string' || !instruction.trim()) {
-      return res.status(400).json({message: '请求缺少 code 或 instruction。'});
+      return res.status(400).json({message: 'Missing code or instruction in the request.'});
     }
     // Conversation history of this pad's session, oldest first. Bounded
     // so a long session cannot grow the request without limit.
@@ -113,39 +130,67 @@ export class AiController extends Controller {
     if (!baseUrl || !apiKey || !model) {
       logCall({status: 'not_configured'});
       return res.status(503).json({
-        message: '服务器未配置 LLM。请在 server/.env 里设置 LLM_BASE_URL、LLM_API_KEY、LLM_MODEL 后重启 server。',
+        message: 'The server has no LLM configured. Set LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in server/.env, then restart the server.',
       });
     }
-    try {
-      const {data} = await axios.post(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    const callModel = async (messages: object[]) => {
+      const {data} = await axios.post(`${baseUrl!.replace(/\/$/, '')}/chat/completions`, {
         model,
         temperature: 0.2,
-        messages: [
-          {role: 'system', content: systemPrompt(String(language || 'js'))},
-          ...(contextNote ? [{role: 'system', content: contextNote}] : []),
-          ...turns,
-          {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`},
-        ],
+        messages,
       }, {
         headers: {Authorization: `Bearer ${apiKey}`},
         timeout: 90000,
       });
       const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-      if (typeof content !== 'string') {
-        logCall({status: 'error', error: 'LLM 返回了无法识别的内容。'});
-        return res.status(502).json({message: 'LLM 返回了无法识别的内容。'});
+      return typeof content === 'string' ? content : null;
+    };
+    try {
+      const messages: object[] = [
+        {role: 'system', content: systemPrompt(String(language || 'js'))},
+        ...(contextNote ? [{role: 'system', content: contextNote}] : []),
+        ...turns,
+        {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`},
+      ];
+      let content = await callModel(messages);
+      if (content === null) {
+        logCall({status: 'error', error: 'The LLM returned an unrecognized response.'});
+        return res.status(502).json({message: 'The LLM returned an unrecognized response.'});
       }
-      const reply = parseReply(content);
+      let reply = parseReply(content);
+      // Completeness enforcement: if the reply looks elided (the diff
+      // UI would treat missing regions as deletions), demand the full
+      // file once more. If it still looks elided, hand it over with
+      // the suspicion flagged instead of silently trusting it.
+      let elidedFirstAttempt: string | null = null;
+      let partialSuspected = reply.code !== code && looksElided(reply.code, code);
+      if (partialSuspected) {
+        elidedFirstAttempt = content;
+        const retryContent = await callModel([
+          ...messages,
+          {role: 'assistant', content},
+          {
+            role: 'user',
+            content: 'Your previous reply was incomplete: it contained elisions, or was much shorter than the original file. Return the COMPLETE revised file once more - reproduce every unchanged line verbatim, with no elision, abbreviation or placeholder comments of any kind. Reply with the same JSON format only.',
+          },
+        ]);
+        if (retryContent !== null) {
+          const retryReply = parseReply(retryContent);
+          content = retryContent;
+          reply = retryReply;
+          partialSuspected = reply.code !== code && looksElided(reply.code, code);
+        }
+      }
       const changed = reply.code !== code;
       // Check the proposal compiles before the user is asked to review
       // it; a broken proposal is labelled, not silently handed over.
       const syntax = changed ? await checkSyntax(String(language || 'js'), reply.code) : null;
-      const fullReply = {...reply, changed};
-      logCall({status: 'ok', rawResponse: content, reply: fullReply, syntax});
+      const fullReply = {...reply, changed, partialSuspected};
+      logCall({status: 'ok', rawResponse: content, elidedFirstAttempt, reply: fullReply, syntax});
       return res.json({...fullReply, syntax});
     } catch (error) {
       const upstream = error && error.response && error.response.data && error.response.data.error && error.response.data.error.message;
-      const message = `LLM 调用失败：${upstream || (error && error.message) || 'unknown error'}`;
+      const message = `LLM call failed: ${upstream || (error && error.message) || 'unknown error'}`;
       logCall({status: 'error', error: message});
       return res.status(502).json({message});
     }
