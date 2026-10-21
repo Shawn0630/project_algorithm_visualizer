@@ -5,7 +5,8 @@ import uuid from 'uuid';
 import fs from 'fs-extra';
 import { memoryLimit, timeLimit } from 'config/constants';
 import { codesDir } from 'config/paths';
-import { execute } from 'utils/misc';
+import { errorSummary, execute } from 'utils/misc';
+import { GitHubApi } from 'utils/apis';
 
 export class DockerTracer extends Tracer {
   private readonly directory: string;
@@ -26,11 +27,49 @@ export class DockerTracer extends Tracer {
     });
   }
 
+  private dockerAvailable(): Promise<boolean> {
+    return execute('docker info --format {{.ServerVersion}}')
+      .then(() => true)
+      .catch(() => false);
+  }
+
+  // The base class builds the image at boot via update(). When the
+  // Docker daemon is not running (Docker Desktop closed), that used
+  // to dump a full stack trace into the boot log - caught, so the
+  // server kept running, but alarming and useless. Probe quietly
+  // instead: one line at boot, and the image builds lazily on first
+  // use if Docker shows up later.
+  async update(release?: Release) {
+    if (!await this.dockerAvailable()) {
+      console.log('C++ tracer: Docker is not available - skipping the image build (start Docker Desktop to enable C++).');
+      return;
+    }
+    try {
+      await super.update(release);
+    } catch (error) {
+      console.log(`C++ tracer: image build failed - ${errorSummary(error)}`);
+    }
+  }
+
+  private async ensureImage() {
+    if (!await this.dockerAvailable()) {
+      throw new Error('Docker is not running - C++ code runs in Docker, so start Docker Desktop and try again.');
+    }
+    const built = await execute(`docker image inspect ${this.imageName}`)
+      .then(() => true)
+      .catch(() => false);
+    if (!built) {
+      const {data} = await GitHubApi.getLatestRelease('algorithm-visualizer', `tracers.${this.lang}`);
+      await this.build(data);
+    }
+  }
+
   route(router: express.Router) {
     router.post(`/${this.lang}`, (req, res, next) => {
       const {code} = req.body;
       const tempPath = path.resolve(codesDir, uuid.v4());
-      fs.outputFile(path.resolve(tempPath, `Main.${this.lang}`), code)
+      this.ensureImage()
+        .then(() => fs.outputFile(path.resolve(tempPath, `Main.${this.lang}`), code))
         .then(() => {
           const containerName = uuid.v4();
           let killed = false;
