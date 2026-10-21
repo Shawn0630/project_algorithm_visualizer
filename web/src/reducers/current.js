@@ -29,6 +29,7 @@ const modifyTitle = createAction(`${prefix}/MODIFY_TITLE`, title => ({ title }))
 const addFile = createAction(`${prefix}/ADD_FILE`, file => ({ file }));
 const renameFile = createAction(`${prefix}/RENAME_FILE`, (file, name) => ({ file, name }));
 const modifyFile = createAction(`${prefix}/MODIFY_FILE`, (file, content) => ({ file, content }));
+const replaceFile = createAction(`${prefix}/REPLACE_FILE`, (file, name, content) => ({ file, name, content }));
 const deleteFile = createAction(`${prefix}/DELETE_FILE`, file => ({ file }));
 
 export const actions = {
@@ -40,6 +41,7 @@ export const actions = {
   modifyTitle,
   addFile,
   modifyFile,
+  replaceFile,
   deleteFile,
   renameFile,
 };
@@ -120,6 +122,7 @@ export default handleActions({
   [combineActions(
     renameFile,
     modifyFile,
+    replaceFile,
   )]: (state, { payload }) => {
     const { file, ...update } = payload;
     const editingFile = { ...file, ...update };

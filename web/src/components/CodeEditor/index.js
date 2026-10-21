@@ -15,10 +15,49 @@ class CodeEditor extends React.Component {
     super(props);
 
     this.aceEditorRef = React.createRef();
+    this.state = { armedLang: null };
+    this.armTimeout = null;
+  }
+
+  componentWillUnmount() {
+    if (this.armTimeout) window.clearTimeout(this.armTimeout);
   }
 
   handleResize() {
     this.aceEditorRef.current.resize();
+  }
+
+  // Selecting a language replaces the current file with that
+  // language's template (name and content, atomically). When the file
+  // holds real work the first click only arms the menu item - the
+  // second click confirms the replacement.
+  handleSelectLanguage(language) {
+    const { editingFile } = this.props.current;
+    const pristine = !editingFile.content.trim() ||
+      languages.some(each => each.skeleton.content === editingFile.content);
+    if (!pristine && this.state.armedLang !== language.ext) {
+      if (this.armTimeout) window.clearTimeout(this.armTimeout);
+      this.setState({ armedLang: language.ext });
+      this.armTimeout = window.setTimeout(() => this.setState({ armedLang: null }), 2500);
+      return;
+    }
+    if (this.armTimeout) window.clearTimeout(this.armTimeout);
+    this.setState({ armedLang: null });
+    this.applyLanguage(language);
+  }
+
+  applyLanguage(language) {
+    const { editingFile, files } = this.props.current;
+    let name = language.skeleton.name;
+    let count = 0;
+    while (files.some(file => file !== editingFile && file.name === name)) {
+      name = `code-${++count}.${language.ext}`;
+    }
+    this.props.setExt(language.ext);
+    if (name !== editingFile.name) {
+      notifyAiSessionDeleted(this.props.current, editingFile.name);
+    }
+    this.props.replaceFile(editingFile, name, language.skeleton.content);
   }
 
   render() {
@@ -67,9 +106,10 @@ class CodeEditor extends React.Component {
             <div className={styles.lang_menu}>
               {
                 languages.filter(language => language.ext !== ext).map(language => (
-                  <div key={language.ext} className={styles.lang_item}
-                       onClick={() => this.props.setExt(language.ext)}>
-                    {language.name}
+                  <div key={language.ext}
+                       className={classes(styles.lang_item, this.state.armedLang === language.ext && styles.armed)}
+                       onClick={() => this.handleSelectLanguage(language)}>
+                    {this.state.armedLang === language.ext ? `用 ${language.name} 模板替换当前代码？` : language.name}
                   </div>
                 ))
               }
