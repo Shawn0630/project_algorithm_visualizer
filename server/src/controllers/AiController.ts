@@ -12,8 +12,10 @@ import Server from 'Server';
 // and returns the complete revised file plus a short explanation.
 // Configuration lives in server/.env and is never shipped to the
 // frontend: LLM_BASE_URL (e.g. Gemini's OpenAI-compatible endpoint),
-// LLM_API_KEY, LLM_MODEL. Without them the endpoint answers 503 so the
-// UI can say exactly what is missing instead of failing obscurely.
+// LLM_API_KEY, LLM_MODEL; LLM_TIMEOUT_MS optionally overrides the
+// per-call timeout (default 180s). Without them the endpoint answers
+// 503 so the UI can say exactly what is missing instead of failing
+// obscurely.
 
 function systemPrompt(ext: string) {
   return [
@@ -144,17 +146,46 @@ export class AiController extends Controller {
         message: 'The server has no LLM configured. Set LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in server/.env, then restart the server.',
       });
     }
+    // One provider call, with retries. Fast failures (429 / 5xx /
+    // network) are cheap to retry with backoff; a timeout has already
+    // burned the whole timeout budget, so it earns a single retry -
+    // otherwise one slow provider turns into several timeouts in a
+    // row. The timeout is generous because thinking models can be
+    // slow to first token; tune it with LLM_TIMEOUT_MS.
+    const timeoutMs = Number(process.env.LLM_TIMEOUT_MS) || 180000;
     const callModel = async (messages: object[]) => {
-      const {data} = await axios.post(`${baseUrl!.replace(/\/$/, '')}/chat/completions`, {
-        model,
-        temperature: 0.2,
-        messages,
-      }, {
-        headers: {Authorization: `Bearer ${apiKey}`},
-        timeout: 90000,
-      });
-      const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-      return typeof content === 'string' ? content : null;
+      let fastRetries = 0;
+      let timeoutRetries = 0;
+      for (;;) {
+        try {
+          const {data} = await axios.post(`${baseUrl!.replace(/\/$/, '')}/chat/completions`, {
+            model,
+            temperature: 0.2,
+            messages,
+          }, {
+            headers: {Authorization: `Bearer ${apiKey}`},
+            timeout: timeoutMs,
+          });
+          const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+          return typeof content === 'string' ? content : null;
+        } catch (error) {
+          const status = error && error.response && error.response.status;
+          const isTimeout = !!(error && (error.code === 'ECONNABORTED' || /timeout/i.test(String(error.message || ''))));
+          if (isTimeout) {
+            if (timeoutRetries >= 1) {
+              throw new Error(`timed out after ${Math.round(timeoutMs / 1000)}s - the provider may be overloaded; try again, or use a lighter model`);
+            }
+            timeoutRetries += 1;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else if (!status || status === 429 || status >= 500) {
+            if (fastRetries >= 2) throw error;
+            fastRetries += 1;
+            await new Promise(resolve => setTimeout(resolve, fastRetries === 1 ? 1000 : 3000));
+          } else {
+            throw error;
+          }
+        }
+      }
     };
     try {
       const messages: object[] = [
