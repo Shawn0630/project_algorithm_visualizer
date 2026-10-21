@@ -13,9 +13,11 @@ import Server from 'Server';
 // Configuration lives in server/.env and is never shipped to the
 // frontend: LLM_BASE_URL (e.g. Gemini's OpenAI-compatible endpoint),
 // LLM_API_KEY, LLM_MODEL; LLM_TIMEOUT_MS optionally overrides the
-// per-call timeout (default 180s). Without them the endpoint answers
-// 503 so the UI can say exactly what is missing instead of failing
-// obscurely.
+// per-call timeout (default 180s), and LLM_MODEL_FALLBACK names a
+// second model (e.g. the lite variant) that takes over automatically
+// when the primary stays overloaded / unreachable. Without the
+// required ones the endpoint answers 503 so the UI can say exactly
+// what is missing instead of failing obscurely.
 
 function systemPrompt(ext: string) {
   return [
@@ -189,10 +191,13 @@ export class AiController extends Controller {
     const apiKey = process.env['LLM_API' + '_KEY'];
     const model = process.env.LLM_MODEL;
     const startedAt = Date.now();
+    let usedModel: string | null = model || null;
+    let totalAttempts = 0;
     const logCall = (partial: object) => appendAiCall({
       ts: new Date().toISOString(),
       status: 'ok',
-      model: model || null,
+      model: usedModel,
+      attempts: totalAttempts,
       language: String(language || 'js'),
       instruction,
       context: context || null,
@@ -211,20 +216,28 @@ export class AiController extends Controller {
         message: 'The server has no LLM configured. Set LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in server/.env, then restart the server.',
       });
     }
-    // One provider call, with retries. Fast failures (429 / 5xx /
-    // network) are cheap to retry with backoff; a timeout has already
-    // burned the whole timeout budget, so it earns a single retry -
-    // otherwise one slow provider turns into several timeouts in a
-    // row. The timeout is generous because thinking models can be
-    // slow to first token; tune it with LLM_TIMEOUT_MS.
+    // One provider call chain for one model, with retries. Overload
+    // failures (429 / 5xx / network) retry with a patient backoff -
+    // 2s, 5s, 10s, honouring Retry-After - because a Gemini 503
+    // "high demand" window usually outlasts a quick retry or two.
+    // A timeout has already burned the whole timeout budget, so it
+    // earns a single retry. The timeout is generous because thinking
+    // models can be slow to first token; tune with LLM_TIMEOUT_MS.
     const timeoutMs = Number(process.env.LLM_TIMEOUT_MS) || 180000;
-    const callModel = async (messages: object[]) => {
+    const FAST_DELAYS = [2000, 5000, 10000];
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const isRetryableFailure = (error: any) => {
+      const status = error && error.response && error.response.status;
+      return !!(error && ((error as any).llmTimeout || !status || status === 429 || status >= 500));
+    };
+    const callModel = async (messages: object[], modelName: string) => {
       let fastRetries = 0;
       let timeoutRetries = 0;
       for (;;) {
+        totalAttempts += 1;
         try {
           const {data} = await axios.post(`${baseUrl!.replace(/\/$/, '')}/chat/completions`, {
-            model,
+            model: modelName,
             temperature: 0.2,
             messages,
           }, {
@@ -238,14 +251,19 @@ export class AiController extends Controller {
           const isTimeout = !!(error && (error.code === 'ECONNABORTED' || /timeout/i.test(String(error.message || ''))));
           if (isTimeout) {
             if (timeoutRetries >= 1) {
-              throw new Error(`timed out after ${Math.round(timeoutMs / 1000)}s - the provider may be overloaded; try again, or use a lighter model`);
+              const timeoutError = new Error(`timed out after ${Math.round(timeoutMs / 1000)}s - the provider may be overloaded; try again, or use a lighter model`);
+              (timeoutError as any).llmTimeout = true;
+              throw timeoutError;
             }
             timeoutRetries += 1;
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await sleep(1000);
           } else if (!status || status === 429 || status >= 500) {
-            if (fastRetries >= 2) throw error;
+            if (fastRetries >= FAST_DELAYS.length) throw error;
+            const retryAfterSec = Number(error && error.response && error.response.headers && error.response.headers['retry-after']);
+            const retryAfterMs = isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec * 1000 : 0;
+            const delay = Math.min(30000, Math.max(FAST_DELAYS[fastRetries], retryAfterMs));
             fastRetries += 1;
-            await new Promise(resolve => setTimeout(resolve, fastRetries === 1 ? 1000 : 3000));
+            await sleep(delay);
           } else {
             throw error;
           }
@@ -260,7 +278,22 @@ export class AiController extends Controller {
         ...turns,
         {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`},
       ];
-      let content = await callModel(messages);
+      // Primary model first; if it stays overloaded / unreachable
+      // through its whole retry chain and a fallback model is
+      // configured (LLM_MODEL_FALLBACK, e.g. the lite variant), the
+      // fallback takes over instead of failing the request.
+      const fallbackModel = process.env.LLM_MODEL_FALLBACK;
+      let content: string | null;
+      try {
+        content = await callModel(messages, model!);
+      } catch (error) {
+        if (fallbackModel && fallbackModel !== model && isRetryableFailure(error)) {
+          usedModel = fallbackModel;
+          content = await callModel(messages, fallbackModel);
+        } else {
+          throw error;
+        }
+      }
       if (content === null) {
         logCall({status: 'error', error: 'The LLM returned an unrecognized response.'});
         return res.status(502).json({message: 'The LLM returned an unrecognized response.'});
@@ -281,7 +314,7 @@ export class AiController extends Controller {
             role: 'user',
             content: 'Your previous reply was incomplete: it contained elisions, or was much shorter than the original file. Return the COMPLETE revised file once more - reproduce every unchanged line verbatim, with no elision, abbreviation or placeholder comments of any kind. Reply with the same JSON format only.',
           },
-        ]);
+        ], usedModel || model!);
         if (retryContent !== null) {
           const retryReply = parseReply(retryContent);
           content = retryContent;
@@ -297,8 +330,12 @@ export class AiController extends Controller {
       logCall({status: 'ok', rawResponse: content, elidedFirstAttempt, reply: fullReply, syntax});
       return res.json({...fullReply, syntax});
     } catch (error) {
-      const upstream = error && error.response && error.response.data && error.response.data.error && error.response.data.error.message;
-      const message = `LLM call failed: ${upstream || (error && error.message) || 'unknown error'}`;
+      const status = error && error.response && error.response.status;
+      const data = error && error.response && error.response.data;
+      const upstream = (data && data.error && data.error.message)
+        || (data && typeof data.message === 'string' && data.message)
+        || (status === 503 ? 'the provider reports the model is overloaded (503, high demand)' : null);
+      const message = `LLM call failed: ${upstream || (error && error.message) || 'unknown error'}${totalAttempts > 1 ? ` (after ${totalAttempts} attempts)` : ''}`;
       logCall({status: 'error', error: message});
       return res.status(502).json({message});
     }
