@@ -6,4 +6,41 @@
   flex-direction: column;
   align-items: stretch;
   min-height: 0;
+
+  .doc_tabs {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    padding: 4px 6px 0;
+    border-bottom: 1px solid $color-border;
+    flex-shrink: 0;
+    overflow-x: auto;
+    white-space: nowrap;
+
+    .doc_tab {
+      padding: 5px 12px;
+      cursor: pointer;
+      border-radius: $border-radius $border-radius 0 0;
+      opacity: .65;
+
+      &:hover {
+        background-color: $color-overlay;
+        opacity: 1;
+      }
+
+      &.selected {
+        opacity: 1;
+        font-weight: 600;
+        box-shadow: inset 0 -2px 0 $color-selected;
+      }
+    }
+  }
+
+  .viewport {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-height: 0;
+  }
 }

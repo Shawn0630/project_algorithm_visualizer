@@ -65,7 +65,7 @@ class CodeEditor extends React.Component {
     const { editingFile } = this.props.current;
     const { user, ext } = this.props.env;
     const currentLanguage = languages.find(language => language.ext === ext);
-    const { lineIndicator } = this.props.player;
+    const { lineIndicator, buildError } = this.props.player;
 
     if (!editingFile) return null;
 
@@ -75,46 +75,75 @@ class CodeEditor extends React.Component {
       fileExt === 'md' ? 'markdown' :
         fileExt === 'json' ? 'json' :
           'plain_text';
+    // The code pad holds code files only. Anything else (Markdown,
+    // data files) renders in the center viewer instead - the pad just
+    // says so. The build-error panel below shows for either.
+    const isCode = !!language || fileExt === 'json';
 
     return (
       <div className={classes(styles.code_editor, className)}>
-        <FoldableAceEditor
-          className={styles.ace_editor}
-          ref={this.aceEditorRef}
-          mode={mode}
-          theme="tomorrow_night_eighties"
-          name="code_editor"
-          editorProps={{ $blockScrolling: true }}
-          onChange={code => this.props.modifyFile(editingFile, code)}
-          markers={lineIndicator ? [{
-            startRow: lineIndicator.lineNumber,
-            startCol: 0,
-            endRow: lineIndicator.lineNumber,
-            endCol: Infinity,
-            className: styles.current_line_marker,
-            type: 'line',
-            inFront: true,
-            _key: lineIndicator.cursor,
-          }] : []}
-          value={editingFile.content}/>
-        <div className={classes(styles.contributors_viewer, className)}>
-          <div className={styles.lang_select}>
-            <span className={styles.lang_label}>
-              {currentLanguage ? currentLanguage.name : ext}
-              <FontAwesomeIcon fixedWidth icon={faCaretUp}/>
-            </span>
-            <div className={styles.lang_menu}>
-              {
-                languages.filter(language => language.ext !== ext).map(language => (
-                  <div key={language.ext}
-                       className={classes(styles.lang_item, this.state.armedLang === language.ext && styles.armed)}
-                       onClick={() => this.handleSelectLanguage(language)}>
-                    {this.state.armedLang === language.ext ? `用 ${language.name} 模板替换当前代码？` : language.name}
-                  </div>
-                ))
-              }
+        {
+          isCode ? (
+            <FoldableAceEditor
+              className={styles.ace_editor}
+              ref={this.aceEditorRef}
+              mode={mode}
+              theme="tomorrow_night_eighties"
+              name="code_editor"
+              editorProps={{ $blockScrolling: true }}
+              onChange={code => this.props.modifyFile(editingFile, code)}
+              markers={lineIndicator ? [{
+                startRow: lineIndicator.lineNumber,
+                startCol: 0,
+                endRow: lineIndicator.lineNumber,
+                endCol: Infinity,
+                className: styles.current_line_marker,
+                type: 'line',
+                inFront: true,
+                _key: lineIndicator.cursor,
+              }] : []}
+              value={editingFile.content}/>
+          ) : (
+            <div className={styles.not_code}>
+              <div>{editingFile.name} is not a code file.</div>
+              <div>It renders in the center viewer - use the tabs above it to switch back to the visualization.</div>
             </div>
-          </div>
+          )
+        }
+        {
+          buildError ? (
+            <div className={styles.build_error}>
+              <div className={styles.build_error_header}>
+                <span>Build Error</span>
+                <button className={styles.build_error_close} title="Dismiss"
+                        onClick={() => this.props.setBuildError(null)}>×</button>
+              </div>
+              <pre className={styles.build_error_body}>{buildError}</pre>
+            </div>
+          ) : null
+        }
+        <div className={classes(styles.contributors_viewer, className)}>
+          {
+            isCode ? (
+              <div className={styles.lang_select}>
+                <span className={styles.lang_label}>
+                  {currentLanguage ? currentLanguage.name : ext}
+                  <FontAwesomeIcon fixedWidth icon={faCaretUp}/>
+                </span>
+                <div className={styles.lang_menu}>
+                  {
+                    languages.filter(language => language.ext !== ext).map(language => (
+                      <div key={language.ext}
+                           className={classes(styles.lang_item, this.state.armedLang === language.ext && styles.armed)}
+                           onClick={() => this.handleSelectLanguage(language)}>
+                        {this.state.armedLang === language.ext ? `Replace current code with the ${language.name} template?` : language.name}
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+            ) : null
+          }
           {/* <span className={classes(styles.contributor, styles.label)}>Contributed by</span>
           {
             (editingFile.contributors || [user || { login: 'guest', avatar_url: faUser }]).map(contributor => (

@@ -145,7 +145,7 @@ class Header extends BaseComponent {
             {/* <Button icon={faFacebook} primary
                     href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`}>Share</Button> */}
             <Button icon={faComments} primary selected={this.props.aiPanelOpened}
-                    onClick={() => this.props.onToggleAiPanel && this.props.onToggleAiPanel()}>AI 助手</Button>
+                    onClick={() => this.props.onToggleAiPanel && this.props.onToggleAiPanel()}>AI Assistant</Button>
             <Button icon={faBook} primary to="/license">License</Button>
             <Button icon={faExpandArrowsAlt} primary
                     onClick={() => this.handleClickFullScreen()}>Fullscreen</Button>

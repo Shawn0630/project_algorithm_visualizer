@@ -13,6 +13,16 @@ import { actions } from 'reducers';
 import { BaseComponent, Button, ProgressBar } from 'components';
 import styles from './Player.module.scss';
 
+// Same message extraction BaseComponent used for error toasts, kept so
+// the build-error panel shows exactly what the toast used to show.
+const errorMessage = error => {
+  if (error && error.response) {
+    const { data, statusText } = error.response;
+    return data ? (typeof data === 'string' ? data : JSON.stringify(data)) : (statusText || 'Unknown error');
+  }
+  return (error && error.message) || 'Unknown error';
+};
+
 class Player extends BaseComponent {
   constructor(props) {
     super(props);
@@ -67,6 +77,7 @@ class Player extends BaseComponent {
 
   build(file) {
     this.reset();
+    this.props.setBuildError(null);
     if (!file) return;
 
     if (this.tracerApiSource) this.tracerApiSource.cancel();
@@ -86,11 +97,13 @@ class Player extends BaseComponent {
           if (axios.isCancel(error)) return;
           this.tracerApiSource = null;
           this.setState({ building: false });
-          this.handleError(error);
+          // Build errors go to the panel under the code pad (copyable
+          // text), not to a toast.
+          this.props.setBuildError(errorMessage(error));
         });
     } else {
       this.setState({ building: false });
-      this.handleError(new Error('Language Not Supported'));
+      this.props.setBuildError('Language Not Supported');
     }
   }
 

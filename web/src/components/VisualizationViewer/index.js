@@ -5,7 +5,9 @@ import { actions } from 'reducers';
 import styles from './VisualizationViewer.module.scss';
 import * as TracerClasses from 'core/tracers';
 import * as LayoutClasses from 'core/layouts';
-import { classes } from 'common/util';
+import { classes, extension } from 'common/util';
+
+const CODE_EXTS = ['js', 'java', 'py', 'cpp', 'json'];
 
 class VisualizationViewer extends BaseComponent {
   constructor(props) {
@@ -79,19 +81,53 @@ class VisualizationViewer extends BaseComponent {
     chunk.commands.forEach(command => this.applyCommand(command));
   }
 
+  // Markdown files render here, not in the code pad: the viewer gets
+  // a tab per Markdown file next to the Visualization tab. Selecting
+  // one makes it the editing file, which the app auto-builds into
+  // this viewer (MarkdownTracer); the Visualization tab switches back
+  // to the first code file.
+  showVisualization() {
+    const { files, editingFile } = this.props.current;
+    if (!editingFile || extension(editingFile.name) !== 'md') return;
+    const firstCode = files.find(file => CODE_EXTS.includes(extension(file.name)));
+    if (firstCode) this.props.setEditingFile(firstCode);
+  }
+
   render() {
     const { className } = this.props;
+    const { files, editingFile } = this.props.current;
+    const mdFiles = (files || []).filter(file => extension(file.name) === 'md');
+    const activeMd = editingFile && extension(editingFile.name) === 'md' ? editingFile : null;
 
     return (
       <div className={classes(styles.visualization_viewer, className)}>
         {
-          this.root && this.root.render()
+          mdFiles.length ? (
+            <div className={styles.doc_tabs}>
+              <div className={classes(styles.doc_tab, !activeMd && styles.selected)}
+                   onClick={() => this.showVisualization()}>
+                Visualization
+              </div>
+              {
+                mdFiles.map(file => (
+                  <div key={file.name}
+                       className={classes(styles.doc_tab, activeMd === file && styles.selected)}
+                       onClick={() => this.props.setEditingFile(file)}>
+                    {file.name}
+                  </div>
+                ))
+              }
+            </div>
+          ) : null
         }
+        <div className={styles.viewport}>
+          {this.root && this.root.render()}
+        </div>
       </div>
     );
   }
 }
 
-export default connect(({ player }) => ({ player }), actions)(
+export default connect(({ player, current }) => ({ player, current }), actions)(
   VisualizationViewer,
 );

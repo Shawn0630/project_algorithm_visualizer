@@ -4,7 +4,7 @@ import AutosizeInput from 'react-input-autosize';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import faPlus from '@fortawesome/fontawesome-free-solid/faPlus';
 import faTimes from '@fortawesome/fontawesome-free-solid/faTimes';
-import { classes, notifyAiSessionDeleted } from 'common/util';
+import { classes, extension, notifyAiSessionDeleted } from 'common/util';
 import { actions } from 'reducers';
 import { languages } from 'common/config';
 import styles from './TabContainer.module.scss';
@@ -47,21 +47,33 @@ class TabContainer extends React.Component {
     this.props.deleteFile(file);
   }
 
+  // The code pad holds code files only (supported languages, plus
+  // JSON data files). Markdown and other text files render in the
+  // center viewer instead and get no tab here.
+  visibleFiles() {
+    const { files } = this.props.current;
+    return files.filter(file => {
+      const ext = extension(file.name);
+      return ext === 'json' || languages.some(language => language.ext === ext);
+    });
+  }
+
   renderClose(file) {
-    if (this.props.current.files.length <= 1) return null;
+    if (this.visibleFiles().length <= 1) return null;
     const armed = this.state.armedFile === file;
     return (
       <span className={classes(styles.close, armed && styles.armed)}
-            title={armed ? '再点一次确认删除' : '删除此文件'}
+            title={armed ? 'Click again to confirm' : 'Delete this file'}
             onClick={e => this.handleCloseFile(e, file)}>
-        {armed ? '确认' : <FontAwesomeIcon fixedWidth icon={faTimes}/>}
+        {armed ? 'Sure?' : <FontAwesomeIcon fixedWidth icon={faTimes}/>}
       </span>
     );
   }
 
   render() {
     const { className, children } = this.props;
-    const { editingFile, files } = this.props.current;
+    const { editingFile } = this.props.current;
+    const files = this.visibleFiles();
 
     return (
       <div className={classes(styles.tab_container, className)}>

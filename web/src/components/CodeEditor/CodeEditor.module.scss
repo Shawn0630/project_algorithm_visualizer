@@ -32,6 +32,57 @@
     }
   }
 
+  .not_code {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 24px;
+    text-align: center;
+    color: $color-font;
+    opacity: .75;
+  }
+
+  .build_error {
+    flex-shrink: 0;
+    border-top: 1px solid #6e3434;
+    background-color: #2b1618;
+
+    .build_error_header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 10px;
+      color: #ff9a9a;
+      font-weight: bold;
+
+      .build_error_close {
+        background: none;
+        border: none;
+        color: inherit;
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0 2px;
+      }
+    }
+
+    .build_error_body {
+      margin: 0;
+      padding: 6px 10px 10px;
+      max-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      user-select: text;
+      font-family: 'JetBrains Mono', Consolas, monospace;
+      font-size: 12px;
+      color: #ffd7d7;
+    }
+  }
+
   .contributors_viewer {
     display: flex;
     flex-wrap: wrap;
