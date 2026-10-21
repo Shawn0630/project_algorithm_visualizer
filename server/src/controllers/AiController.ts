@@ -4,6 +4,7 @@ import { Controller } from 'controllers/Controller';
 import { appendAiCall } from 'utils/aiCallLog';
 import { checkSyntax } from 'utils/syntaxCheck';
 import { tracerReference } from 'utils/tracerDocs';
+import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
 
 // AI coding assistant for the editor ("coding pad"). The frontend sends
@@ -150,10 +151,26 @@ export class AiController extends Controller {
   constructor(server: Server) {
     super(server);
     this.router.post('/assist', this.assist);
+    this.router.get('/models', this.models);
   }
 
   route = (router: express.Router): void => {
     router.use('/ai', this.router);
+  };
+
+  // The models the configured key can use, for the assistant's model
+  // picker (see utils/llmModels).
+  models = async (req: express.Request, res: express.Response) => {
+    try {
+      const result = await fetchLlmModels();
+      if (!result) {
+        return res.status(503).json({message: 'The server has no LLM configured. Set LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in server/.env, then restart the server.'});
+      }
+      return res.json(result);
+    } catch (error) {
+      const upstream = error && error.response && error.response.data && error.response.data.error && error.response.data.error.message;
+      return res.status(502).json({message: `Listing models failed: ${upstream || (error && error.message) || 'unknown error'}`});
+    }
   };
 
   assist = async (req: express.Request, res: express.Response) => {
@@ -190,8 +207,15 @@ export class AiController extends Controller {
     const baseUrl = process.env.LLM_BASE_URL;
     const apiKey = process.env['LLM_API' + '_KEY'];
     const model = process.env.LLM_MODEL;
+    // The model picker in the assistant can choose the model per
+    // request; it wins over the .env default for that call. The env
+    // fallback model still applies underneath either choice.
+    const requestedModel = typeof (req.body as any).model === 'string' && (req.body as any).model.trim()
+      ? (req.body as any).model.trim().slice(0, 200)
+      : null;
+    const primaryModel = requestedModel || model;
     const startedAt = Date.now();
-    let usedModel: string | null = model || null;
+    let usedModel: string | null = primaryModel || null;
     let totalAttempts = 0;
     const logCall = (partial: object) => appendAiCall({
       ts: new Date().toISOString(),
@@ -210,7 +234,7 @@ export class AiController extends Controller {
       ...partial,
       durationMs: Date.now() - startedAt,
     } as any);
-    if (!baseUrl || !apiKey || !model) {
+    if (!baseUrl || !apiKey || !primaryModel) {
       logCall({status: 'not_configured'});
       return res.status(503).json({
         message: 'The server has no LLM configured. Set LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in server/.env, then restart the server.',
@@ -285,9 +309,9 @@ export class AiController extends Controller {
       const fallbackModel = process.env.LLM_MODEL_FALLBACK;
       let content: string | null;
       try {
-        content = await callModel(messages, model!);
+        content = await callModel(messages, primaryModel!);
       } catch (error) {
-        if (fallbackModel && fallbackModel !== model && isRetryableFailure(error)) {
+        if (fallbackModel && fallbackModel !== primaryModel && isRetryableFailure(error)) {
           usedModel = fallbackModel;
           content = await callModel(messages, fallbackModel);
         } else {
@@ -314,7 +338,7 @@ export class AiController extends Controller {
             role: 'user',
             content: 'Your previous reply was incomplete: it contained elisions, or was much shorter than the original file. Return the COMPLETE revised file once more - reproduce every unchanged line verbatim, with no elision, abbreviation or placeholder comments of any kind. Reply with the same JSON format only.',
           },
-        ], usedModel || model!);
+        ], usedModel || primaryModel!);
         if (retryContent !== null) {
           const retryReply = parseReply(retryContent);
           content = retryContent;

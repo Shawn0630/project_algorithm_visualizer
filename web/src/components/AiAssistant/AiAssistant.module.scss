@@ -17,6 +17,24 @@
     text-overflow: ellipsis;
   }
 
+  .model_row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: .85;
+
+    .model_select {
+      flex: 1;
+      min-width: 0;
+      padding: 4px 6px;
+      background-color: $theme-dark;
+      color: inherit;
+      border: 1px solid $color-border;
+      border-radius: 6px;
+      font-size: $font-size-normal;
+    }
+  }
+
   .empty_state {
     opacity: .6;
     line-height: 1.6;

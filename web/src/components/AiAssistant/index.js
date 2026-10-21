@@ -20,6 +20,15 @@ import styles from './AiAssistant.module.scss';
 // into the history so the AI knows what happened to it.
 const CODE_EXTS = ['js', 'java', 'py', 'cpp'];
 const STORAGE_KEY = 'av-ai-sessions-v1';
+const MODEL_KEY = 'av-ai-model-v1';
+
+function loadModelPref() {
+  try {
+    return window.localStorage.getItem(MODEL_KEY) || '';
+  } catch (error) {
+    return '';
+  }
+}
 
 function loadSessions() {
   try {
@@ -58,7 +67,10 @@ const emptySession = () => ({ messages: [], pending: null });
 class AiAssistant extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { sessions: loadSessions(), instruction: '', busy: false, error: '' };
+    this.state = {
+      sessions: loadSessions(), instruction: '', busy: false, error: '',
+      models: [], selectedModel: loadModelPref(),
+    };
     this.logRef = React.createRef();
   }
 
@@ -76,6 +88,36 @@ class AiAssistant extends React.Component {
     // File button), its AI session is deleted with it.
     this.handleSessionDelete = event => this.dropSession(event.detail);
     window.addEventListener(AI_SESSION_DELETE_EVENT, this.handleSessionDelete);
+    this.loadModels();
+  }
+
+  // The model picker: the server reports which models the API key
+  // can use; the choice is global (not per pad), remembered across
+  // reloads, and sent with every request. The .env fallback model
+  // still applies underneath the picked one.
+  loadModels() {
+    AiApi.models().then(({ models, configured }) => {
+      const list = Array.isArray(models) ? models : [];
+      this.setState(prev => {
+        let selected = prev.selectedModel;
+        if (!selected || (list.length && !list.includes(selected))) {
+          selected = (configured && configured.model) || list[0] || '';
+        }
+        return { models: list, selectedModel: selected };
+      });
+    }).catch(() => {
+      // No list (server down / LLM unconfigured): the picker stays
+      // hidden and requests behave exactly as before.
+    });
+  }
+
+  pickModel(model) {
+    this.setState({ selectedModel: model });
+    try {
+      window.localStorage.setItem(MODEL_KEY, model);
+    } catch (error) {
+      // Storage unavailable: the choice still applies to this page.
+    }
   }
 
   componentWillUnmount() {
@@ -167,6 +209,7 @@ class AiAssistant extends React.Component {
       code: editingFile.content,
       language: extension(editingFile.name),
       instruction: text,
+      model: this.state.selectedModel || undefined,
       history,
       context: {
         title: (titles || []).join(' / '),
@@ -352,6 +395,17 @@ class AiAssistant extends React.Component {
         <div className={styles.pad_name}>
           {editingFile ? `Session for ${editingFile.name}` : 'No file open'}
         </div>
+        {
+          this.state.models.length ? (
+            <div className={styles.model_row}>
+              <span>Model</span>
+              <select className={styles.model_select} value={this.state.selectedModel} disabled={busy}
+                      onChange={e => this.pickModel(e.target.value)}>
+                {this.state.models.map(model => <option key={model} value={model}>{model}</option>)}
+              </select>
+            </div>
+          ) : null
+        }
         <div className={styles.log} ref={this.logRef}>
           {
             !isCode ? (

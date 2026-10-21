@@ -1,10 +1,10 @@
 import express from 'express';
-import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { Controller } from 'controllers/Controller';
 import { algorithmsDir, leetcodeDir } from 'config/paths';
 import { readAiCalls } from 'utils/aiCallLog';
+import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
 
 // Admin console, served at /api/admin (page) with JSON endpoints under
@@ -181,33 +181,14 @@ export class AdminController extends Controller {
     res.json({calls: readAiCalls(limit)});
   };
 
-  // Asks the configured LLM endpoint which models the API key can
-  // actually use (GET {LLM_BASE_URL}/models) - the ground truth for
-  // LLM_MODEL / LLM_MODEL_FALLBACK, so a 404 "model not found" never
-  // has to be debugged by guessing ids. The key itself never leaves
-  // the server.
+  // Which models the configured API key can use - see utils/llmModels.
   getLlmModels = async (req: express.Request, res: express.Response) => {
-    const baseUrl = process.env.LLM_BASE_URL;
-    const apiKey = process.env['LLM_API' + '_KEY'];
-    if (!baseUrl || !apiKey) {
-      return res.status(503).json({message: 'No LLM is configured on this server (LLM_BASE_URL / LLM_API_KEY missing in server/.env).'});
-    }
     try {
-      const {data} = await axios.get(`${baseUrl.replace(/\/$/, '')}/models`, {
-        headers: {Authorization: `Bearer ${apiKey}`},
-        timeout: 30000,
-      });
-      const models = (data && Array.isArray(data.data) ? data.data : [])
-        .map((entry: any) => entry && entry.id)
-        .filter((id: any) => typeof id === 'string')
-        .sort();
-      return res.json({
-        models,
-        configured: {
-          model: process.env.LLM_MODEL || null,
-          fallback: process.env.LLM_MODEL_FALLBACK || null,
-        },
-      });
+      const result = await fetchLlmModels();
+      if (!result) {
+        return res.status(503).json({message: 'No LLM is configured on this server (LLM_BASE_URL / LLM_API_KEY missing in server/.env).'});
+      }
+      return res.json(result);
     } catch (error) {
       const status = error && error.response && error.response.status;
       const upstream = error && error.response && error.response.data && error.response.data.error && error.response.data.error.message;
