@@ -58,25 +58,90 @@ export function looksElided(code: string, original: string): boolean {
   return false;
 }
 
-function parseReply(content: string): { code: string, explanation: string } {
+// Strip one wrapping markdown fence from a code string, if present.
+// The capture is lazy and keeps the content byte-exact, including a
+// trailing newline that belongs to the code itself.
+function stripFence(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```[a-zA-Z0-9]*\n([\s\S]*?)```$/);
+  return match ? match[1] : text;
+}
+
+// The first balanced {...} region at or after `from`, honouring
+// string literals and escapes - so prose braces around a JSON
+// payload do not poison the extraction.
+function balancedJson(text: string, from: number): string | null {
+  const start = text.indexOf('{', from);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function asReply(parsed: any): { code: string, explanation: string } | null {
+  if (parsed && typeof parsed.code === 'string') {
+    return {
+      code: stripFence(parsed.code),
+      explanation: typeof parsed.explanation === 'string' ? parsed.explanation : '',
+    };
+  }
+  return null;
+}
+
+export function parseReply(content: string): { code: string, explanation: string } {
   const trimmed = content.trim();
-  const attempts = [
-    trimmed,
-    trimmed.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, ''),
-    trimmed.slice(trimmed.indexOf('{'), trimmed.lastIndexOf('}') + 1),
-  ];
-  for (const attempt of attempts) {
+  // 1. JSON, wherever it lives: the whole reply, inside a fence, or
+  // as a balanced {...} region surrounded by prose. Models keep
+  // adding "Here is the code:" / "Hope this helps" around the
+  // payload; the previous first-{-to-last-} slice and the raw-text
+  // fallback then leaked that prose into the code pad.
+  const candidates: string[] = [trimmed];
+  const jsonFence = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)```/);
+  if (jsonFence) candidates.push(jsonFence[1]);
+  let searchFrom = 0;
+  for (let i = 0; i < 5; i += 1) {
+    const region = balancedJson(trimmed, searchFrom);
+    if (!region) break;
+    candidates.push(region);
+    const next = trimmed.indexOf('{', searchFrom + 1);
+    if (next < 0) break;
+    searchFrom = next;
+  }
+  for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(attempt);
-      if (parsed && typeof parsed.code === 'string') {
-        return {code: parsed.code, explanation: typeof parsed.explanation === 'string' ? parsed.explanation : ''};
-      }
+      const reply = asReply(JSON.parse(candidate));
+      if (reply) return reply;
     } catch (error) {
       // try the next shape
     }
   }
-  // The model ignored the JSON contract; treat the whole reply as code.
-  return {code: trimmed, explanation: ''};
+  // 2. A fenced code block without JSON: the block is the code, the
+  // prose around it is the explanation.
+  const codeFence = trimmed.match(/```[a-zA-Z0-9]*\n([\s\S]*?)```/);
+  if (codeFence) {
+    return {code: codeFence[1], explanation: trimmed.replace(codeFence[0], '').trim()};
+  }
+  // 3. Raw code with no packaging at all: hand it back untouched
+  // (a wrapping fence, if that is all the packaging there is, still
+  // comes off via the candidates above / stripFence here).
+  const fenced = stripFence(trimmed);
+  return {code: fenced !== trimmed ? fenced : content, explanation: ''};
 }
 
 export class AiController extends Controller {
