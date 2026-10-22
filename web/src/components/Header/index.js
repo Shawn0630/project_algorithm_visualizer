@@ -69,9 +69,18 @@ class Header extends BaseComponent {
     if (!currentCategory) return null;
     const types = [];
     categories.forEach(c => { if (!types.includes(c.type)) types.push(c.type); });
+    // A problem's difficulty rides along as one of its tags
+    // (exactly one of Easy / Medium / Hard - the import flow
+    // and the admin save both enforce that); surface it as a
+    // pill next to the problem title in the title bar.
+    const tagNames = categories
+      .filter(c => c.type === currentCategory.type && (c.algorithms || []).some(a => a.key === algorithm.algorithmKey))
+      .map(c => c.name);
+    const difficulty = ['Easy', 'Medium', 'Hard'].find(d => tagNames.includes(d)) || null;
     return {
       types,
       type: currentCategory.type,
+      difficulty,
       currentCategory,
       sections: categories.filter(c => c.type === currentCategory.type),
       problems: currentCategory.algorithms || [],
@@ -248,6 +257,11 @@ class Header extends BaseComponent {
                   selected: !!crumb.currentProblem && a.key === crumb.currentProblem.key,
                   onSelect: () => this.goToProblem(crumb.currentCategory.key, a.key),
                 })))}
+                {crumb.difficulty && (
+                  <span className={classes(styles.difficulty, styles[`difficulty_${crumb.difficulty.toLowerCase()}`])}>
+                    {crumb.difficulty}
+                  </span>
+                )}
                 <Button className={styles.nav_toggle} onClick={onClickTitleBar}>
                   <FontAwesomeIcon fixedWidth icon={navigatorOpened ? faCaretDown : faCaretRight}/>
                 </Button>

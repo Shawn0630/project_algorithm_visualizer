@@ -45,6 +45,32 @@
           margin-left: 2px;
         }
 
+        // Difficulty pill next to the problem title.
+        .difficulty {
+          align-self: center;
+          margin-left: 8px;
+          padding: 1px 9px;
+          border-radius: 999px;
+          font-size: $font-size-normal;
+          line-height: 1.5;
+          white-space: nowrap;
+
+          &.difficulty_easy {
+            color: #51cf66;
+            background-color: rgba(81, 207, 102, .14);
+          }
+
+          &.difficulty_medium {
+            color: #fcc419;
+            background-color: rgba(252, 196, 25, .14);
+          }
+
+          &.difficulty_hard {
+            color: #ff6b6b;
+            background-color: rgba(255, 107, 107, .14);
+          }
+        }
+
         // Breadcrumb segments and their dropdowns.
         .crumb_wrap {
           position: relative;
