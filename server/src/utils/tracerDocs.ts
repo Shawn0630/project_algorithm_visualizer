@@ -125,7 +125,7 @@ const RANDOMIZE: { [ext: string]: string } = {
 
 const LANGUAGE_NOTES: { [ext: string]: string } = {
   js: 'JavaScript surface: camelCase methods. Import once: const { Tracer, Array1DTracer, Array2DTracer, ChartTracer, GraphTracer, LogTracer, Layout, VerticalLayout, HorizontalLayout, Randomize } = require(\'algorithm-visualizer\'); Constructors take an optional title: new Array1DTracer(\'Array\'). Tracer.delay() is static.',
-  java: 'Java surface: camelCase methods. The file must be `import org.algorithm_visualizer.*;` and define public class Main with public static void main(String[] args). Constructors take an optional title string: new LogTracer("Console"). Layout.setRoot takes a single Commander: use new VerticalLayout(new Commander[]{a, b}). Tracer.delay() is static. Randomize.Array1D(...).create() returns Object[] - cast, e.g. (Integer[]) ...create().',
+  java: 'Java surface: camelCase methods. Import once: import org.algorithm_visualizer.*;. A STANDALONE pad file (no other class in it) defines public class Main with public static void main(String[] args) and the driver lives in main. A LeetCode-style file that already defines class Solution instead gets a NON-public class Main appended in the same file (two public classes in one file will not compile). Constructors take an optional title string: new LogTracer("Console"). Layout.setRoot takes a single Commander: use new VerticalLayout(new Commander[]{a, b}). Tracer.delay() is static. Randomize.Array1D(...).create() returns Object[] - cast, e.g. (Integer[]) ...create().',
   py: 'Python surface: snake_case methods (set_root, select_row, add_node, layout_circle, ...); the camelCase aliases also work but prefer snake_case. Import once: from algorithm_visualizer import *. Constructors take an optional title: LogTracer("Console"). Tracer.delay() is called with no argument - the line number is captured automatically. Randomize builders need .create().',
   cpp: 'C++ surface: camelCase methods, tracers are values (not pointers): Array2DTracer grid("Grid"); Include once: #include "algorithm-visualizer.h". Layout::setRoot takes a layout value built from an initializer list: Layout::setRoot(VerticalLayout({grid, logger})); Tracer::delay() is static. set() accepts std::vector data (nested vectors for 2D).',
 };
@@ -156,6 +156,91 @@ function workedExample(ext: string): string {
 
 const camelToSnake = (name: string) => name.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`);
 
+// The shape a LeetCode-style pad must take: the user's class,
+// untouched, plus a driver that makes it visualize. Models copy
+// patterns far more reliably than they follow prose rules, so
+// each language gets the concrete pattern to imitate.
+const DRIVER_EXAMPLES: { [ext: string]: string } = {
+  py: [
+    'class Solution:',
+    '    def search(self, nums, target):',
+    '        # ... the user\'s algorithm, unchanged ...',
+    '',
+    '# --- driver: makes the class above visualize (appended, class untouched) ---',
+    'array_tracer = Array1DTracer(\'Array\')',
+    'logger = LogTracer(\'Console\')',
+    'Layout.set_root(VerticalLayout([array_tracer, logger]))',
+    'nums = [1, 3, 5, 7, 9]',
+    'array_tracer.set(nums)',
+    'logger.println(\'search [1, 3, 5, 7, 9] for 7\')',
+    'Tracer.delay()',
+    'result = Solution().search(nums, 7)',
+    'logger.println(f\'result: {result}\')',
+    'Tracer.delay()',
+  ].join('\n'),
+  js: [
+    'class Solution {',
+    '  search(nums, target) { /* ... the user\'s algorithm, unchanged ... */ }',
+    '}',
+    '',
+    '// --- driver: makes the class above visualize (appended, class untouched) ---',
+    'const arrayTracer = new Array1DTracer(\'Array\');',
+    'const logger = new LogTracer(\'Console\');',
+    'Layout.setRoot(new VerticalLayout([arrayTracer, logger]));',
+    'const nums = [1, 3, 5, 7, 9];',
+    'arrayTracer.set(nums);',
+    'logger.println(\'search [1, 3, 5, 7, 9] for 7\');',
+    'Tracer.delay();',
+    'const result = new Solution().search(nums, 7);',
+    'logger.println(`result: ${result}`);',
+    'Tracer.delay();',
+  ].join('\n'),
+  java: [
+    'class Solution {',
+    '    public int search(int[] nums, int target) { /* ... unchanged ... */ }',
+    '}',
+    '',
+    '// --- driver: a NON-public Main in the SAME file (a second public',
+    '// class would not compile). Tests call Solution directly; this',
+    '// main only runs when the pad is built / visualized. ---',
+    'class Main {',
+    '    public static void main(String[] args) {',
+    '        Array1DTracer arrayTracer = new Array1DTracer("Array");',
+    '        LogTracer logger = new LogTracer("Console");',
+    '        Layout.setRoot(new VerticalLayout(new Commander[]{arrayTracer, logger}));',
+    '        int[] nums = {1, 3, 5, 7, 9};',
+    '        arrayTracer.set(nums);',
+    '        logger.println("search for 7");',
+    '        Tracer.delay();',
+    '        int result = new Solution().search(nums, 7);',
+    '        logger.println("result: " + result);',
+    '        Tracer.delay();',
+    '    }',
+    '}',
+  ].join('\n'),
+  cpp: [
+    'class Solution {',
+    'public:',
+    '    int search(vector<int>& nums, int target) { /* ... unchanged ... */ }',
+    '};',
+    '',
+    '// --- driver: appended main() makes the class visualize ---',
+    'int main() {',
+    '    Array1DTracer arrayTracer("Array");',
+    '    LogTracer logger("Console");',
+    '    Layout::setRoot(VerticalLayout({arrayTracer, logger}));',
+    '    vector<int> nums = {1, 3, 5, 7, 9};',
+    '    arrayTracer.set(nums);',
+    '    logger.println("search for 7");',
+    '    Tracer::delay();',
+    '    int result = Solution().search(nums, 7);',
+    '    logger.println("result: " + std::to_string(result));',
+    '    Tracer::delay();',
+    '    return 0;',
+    '}',
+  ].join('\n'),
+};
+
 export function tracerReference(ext: string): string {
   const language = LANGUAGE_NOTES[ext] ? ext : 'js';
   const lines: string[] = [
@@ -167,7 +252,7 @@ export function tracerReference(ext: string): string {
     '3. Feed the tracer the SAME live data the algorithm mutates: set() it once, then patch() on every write so the view tracks the real values - never visualize a copy.',
     '4. Rhythm: select() what is being examined -> delay() -> mutate -> patch() the changed cells -> delay() -> depatch()/deselect() to clean up. A change with no delay() after it never becomes a frame.',
     '5. Exactly one Layout.setRoot(...), placed before the first delay().',
-    '6. If the file ONLY defines a class (e.g. a LeetCode-style class Solution) or functions and runs nothing at top level, NOTHING will visualize - a class definition alone produces no frames. Then APPEND a driver section at the very end of the file: create the tracers, set the layout root once, instantiate the class, call the method with a concrete example input, narrate the input and the result through a LogTracer, and delay() before and after the call. Keep the class itself unchanged unless the instruction asks to instrument its internals.',
+    '6. If the file ONLY defines a class (e.g. a LeetCode-style class Solution) or functions and runs nothing at top level, NOTHING will visualize - a class definition alone produces no frames. Then APPEND a driver section at the very end of the file, in the shape of the per-language driver pattern below: create the tracers, set the layout root once, instantiate the class, call the method with a concrete example input, narrate the input and the result through a LogTracer, and delay() before and after the call. Keep the class itself unchanged unless the instruction asks to instrument its internals. JAVA WARNING: when the file already defines a class (Solution), the driver is a NON-public `class Main` with main() appended in the SAME file - a second PUBLIC class in one file does not compile. The test runner calls the Solution class directly, so the driver never interferes with tests.',
     '7. The ONLY visualization library in this app is algorithm_visualizer. There is NO module named py_viz (or anything similar), and there are NO tracer methods named set_variables or mark_line - never import a module or call a method that is not in this reference.',
     '8. Never initialize a tracer variable to None/null as a placeholder: if the algorithm reads a tracer through a global, that global must hold a real tracer BEFORE the algorithm runs - create the tracers at module level (or at the top of the driver, before the call) and only then invoke the code.',
     '',
@@ -188,5 +273,6 @@ export function tracerReference(ext: string): string {
     lines.push('=== Complete worked example (real file from this app - follow its structure and idioms) ===');
     lines.push(example);
   }
+  lines.push('', '=== Pattern for LeetCode-style pads (class + appended driver) ===', DRIVER_EXAMPLES[language]);
   return lines.join('\n');
 }
