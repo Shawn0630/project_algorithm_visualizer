@@ -31,10 +31,11 @@ RUN npm install --no-audit --no-fund
 # ---------- Stage 3: runtime ----------
 FROM node:20-bookworm-slim
 # python3 is for the Python tracer / Python test runs inside the
-# container. Java pads need a JDK and C++ pads need Docker on the
-# host, so those two keep reporting their "not available" message
-# in this image; the native install covers them.
-RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+# container; the headless JDK compiles and runs the Java tracer
+# library, so Java visualizations work here too. C++ pads still
+# need a Docker daemon, so they keep reporting their "not
+# available" message in this image; the native install covers them.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 default-jdk-headless \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/server
 COPY server/package.json server/package-lock.json ./
@@ -42,6 +43,14 @@ COPY --from=server-deps /server/node_modules ./node_modules
 COPY server/ ./
 COPY --from=web-build /web/build ./public/frontend-built
 COPY algorithms/ ./seed-content/algorithms/
+# The tracer libraries: in a native checkout they sit at the repo
+# root next to server/, and every tracer path resolves them
+# relative to that root - in this image the root is /app. Without
+# these two copies, Python visualization dies with
+# "No module named 'algorithm_visualizer'" and Java with an
+# ENOENT scandir on tracers.java.
+COPY tracers.py /app/tracers.py
+COPY tracers.java /app/tracers.java
 ENV NODE_ENV=production \
     HTTP_PORT=8088 \
     HTTPS_PORT=8443 \

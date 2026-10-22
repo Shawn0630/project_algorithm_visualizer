@@ -45,7 +45,13 @@ export class PyTracer extends Tracer {
       // The user's code runs as Main.py under a small launcher that
       // pre-imports the tracer library (see utils/pyLauncher), so a
       // missing import can no longer break a run.
-      fs.outputFile(path.resolve(tempPath, 'Main.py'), code)
+      fs.pathExists(this.libraryDir)
+        .then(exists => {
+          if (!exists) {
+            throw new Error('The Python tracer library is missing: tracers.py was not found next to the server (expected at ' + this.libraryDir + '). In the Docker image it is copied there at build time - rebuild with `docker compose up --build`; in a native checkout it is the tracers.py/ folder in the repo root.');
+          }
+        })
+        .then(() => fs.outputFile(path.resolve(tempPath, 'Main.py'), code))
         .then(() => fs.outputFile(path.resolve(tempPath, '_launcher.py'), PY_LAUNCHER_SOURCE))
         .then(() => new Promise<void>((resolve, reject) => {
           const python = process.env.PYTHON_BIN || 'python3';

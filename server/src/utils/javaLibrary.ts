@@ -39,6 +39,9 @@ export function ensureJavaLibrary(): Promise<void> {
     libraryBuild = (async () => {
       await fs.remove(JAVA_LIBRARY_CLASSES_DIR);
       await fs.ensureDir(JAVA_LIBRARY_CLASSES_DIR);
+      if (!(await fs.pathExists(JAVA_LIBRARY_SOURCE_DIR))) {
+        throw new Error('The Java tracer library is missing: tracers.java was not found next to the server (expected at ' + JAVA_LIBRARY_SOURCE_DIR + '). In the Docker image it is copied there at build time - rebuild with `docker compose up --build`; in a native checkout it is the tracers.java/ folder in the repo root.');
+      }
       const sources = (await fs.readdir(JAVA_LIBRARY_SOURCE_DIR))
         .filter(file => file.endsWith('.java'))
         .map(file => path.resolve(JAVA_LIBRARY_SOURCE_DIR, file));
