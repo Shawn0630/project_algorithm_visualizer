@@ -25,7 +25,11 @@ class LayoutsMenu extends React.Component {
 
   toggle(open = !this.state.open) {
     if (open) {
-      const rect = this.rootEl ? this.rootEl.getBoundingClientRect() : null;
+      // The wrapper is display:contents (so the Button lays out
+      // exactly like the other header buttons), so the anchor is
+      // measured on the Button element itself.
+      const buttonEl = this.rootEl ? this.rootEl.querySelector('[class*=Button_button]') || this.rootEl.firstElementChild : null;
+      const rect = buttonEl ? buttonEl.getBoundingClientRect() : null;
       this.setState({
         open: true,
         saving: false,

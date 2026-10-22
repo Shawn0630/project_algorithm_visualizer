@@ -1,8 +1,12 @@
 @import "~common/stylesheet/index";
 
 .layouts_menu {
-  position: relative;
-  display: inline-block;
+  // No box of its own: the Button inside must lay out exactly
+  // like the header's other buttons (direct flex children). A
+  // wrapped inline-block made the Layouts button sit differently
+  // from its siblings. The popover/overlay are position:fixed, so
+  // they do not need this element to have a box either.
+  display: contents;
 }
 
 .overlay {

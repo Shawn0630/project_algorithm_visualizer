@@ -1,14 +1,16 @@
 import React from 'react';
 import { connect } from 'react-redux';
-import { TestApi, AiApi, PadTestsApi } from 'apis';
+import { TestApi, PadTestsApi } from 'apis';
 import { extension, aiPadKey, TESTCASES_APPLY_EVENT, VISUALIZE_CASE_EVENT, notifyLayoutChanged } from 'common/util';
 import { buildCaseVisualization } from 'common/visualizeCase';
 import styles from './TestPanel.module.scss';
 
 // LeetCode-style test cases for a code pad, docked under the editor
-// as its own card, with three tabs: Testcase (edit + run cases),
-// Test Result, and AI Test Cases (a dedicated generation session
-// for this pad - ask for cases, then follow up to refine them).
+// as its own card, with two tabs: Testcase (edit + run cases) and
+// Test Result. The test-case generation CHAT lives in the AI
+// Assistant pane now, as a tab beside the code AI; its Apply
+// action dispatches TESTCASES_APPLY_EVENT, which this panel
+// still owns the receiving end of (ingestCases below).
 //
 // Case storage: a tests.json file in the page's folder ({entry,
 // cases: [{name, args, expected}]}) seeds a pad the first time and
@@ -49,20 +51,68 @@ const toTextCase = tc => ({
 
 const blankCase = n => ({ name: `Case ${n}`, argsText: '[]', expectedText: 'null' });
 
-// The page's problem statement for the AI session: the first
-// Readme (or other Markdown doc, LICENSE excluded), length-capped.
-function pageReadme(files) {
-  const docs = (files || []).filter(f => /\.md$/i.test(f.name) && !/license/i.test(f.name));
-  const readme = docs.find(f => /readme/i.test(f.name)) || docs[0];
-  return readme ? String(readme.content || '').slice(0, 8000) : '';
+// Character-level diff of two JSON strings, for the results view:
+// the parts of the actual output that differ from the expected
+// value (and vice versa) come back flagged as changed segments,
+// so the UI can tint them. An LCS walk over the characters;
+// past the size cap the whole value is flagged when the strings
+// differ at all (a giant value's diff is not worth the table).
+function diffSegments(aText, bText) {
+  const a = aText === undefined ? 'null' : aText;
+  const b = bText === undefined ? 'null' : bText;
+  if (a === b) {
+    return { aSegs: [{ text: a, changed: false }], bSegs: [{ text: b, changed: false }] };
+  }
+  const CAP = 1200;
+  if (a.length > CAP || b.length > CAP) {
+    return { aSegs: [{ text: a, changed: true }], bSegs: [{ text: b, changed: true }] };
+  }
+  const m = a.length;
+  const n = b.length;
+  const dp = [];
+  for (let i = 0; i <= m; i++) dp.push(new Uint16Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const aSegs = [];
+  const bSegs = [];
+  const push = (segs, text, changed) => {
+    const last = segs[segs.length - 1];
+    if (last && last.changed === changed) last.text += text;
+    else segs.push({ text, changed });
+  };
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      push(aSegs, a[i], false);
+      push(bSegs, b[j], false);
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      push(aSegs, a[i], true);
+      i++;
+    } else {
+      push(bSegs, b[j], true);
+      j++;
+    }
+  }
+  while (i < m) { push(aSegs, a[i], true); i++; }
+  while (j < n) { push(bSegs, b[j], true); j++; }
+  return { aSegs, bSegs };
 }
 
-// The part of a pad record that lives in the database.
+// The part of a pad record that lives in the database. (The
+// test-case generation CHAT also lives in the record, but it is
+// owned by the AI Assistant pane's Test Cases tab now - this
+// panel never writes that field, and the server merges fields
+// partially, so the two never clobber each other.)
 const persistSlice = pad => ({
   entry: pad.entry,
   cases: pad.cases,
   seededFrom: pad.seededFrom,
-  chat: pad.chat || [],
 });
 
 class TestPanel extends React.Component {
@@ -73,9 +123,6 @@ class TestPanel extends React.Component {
       tab: 'case',
       running: false,
       vizError: '',
-      chatInput: '',
-      chatSending: false,
-      chatError: '',
     };
     this.sentSlices = {};
     this.syncTimers = {};
@@ -88,7 +135,7 @@ class TestPanel extends React.Component {
     this.handleApplyCases = event => {
       const detail = event.detail || {};
       if (!detail.key || detail.key !== this.padKey()) return;
-      this.ingestCases(detail.entry, detail.cases, 'append');
+      this.ingestCases(detail.entry, detail.cases, detail.mode === 'replace' ? 'replace' : 'append');
     };
     window.addEventListener(TESTCASES_APPLY_EVENT, this.handleApplyCases);
     // Hydrate from the server store: its records win when newer
@@ -106,7 +153,6 @@ class TestPanel extends React.Component {
               entry: typeof server.entry === 'string' ? server.entry : '',
               cases: Array.isArray(server.cases) && server.cases.length ? server.cases : [blankCase(1)],
               seededFrom: server.seededFrom === undefined ? null : server.seededFrom,
-              chat: Array.isArray(server.chat) ? server.chat : [],
               active: local ? local.active : 0,
               open: local ? local.open : false,
               results: local ? local.results : null,
@@ -206,7 +252,6 @@ class TestPanel extends React.Component {
     const key = this.padKey();
     if (!key) return null;
     const stored = this.state.pads[key];
-    const chat = (stored && stored.chat) || [];
     const defaults = this.defaults();
     if (defaults && (!stored || stored.seededFrom !== defaults.raw)) {
       return {
@@ -221,11 +266,10 @@ class TestPanel extends React.Component {
         runError: '',
         durationMs: null,
         seededFrom: defaults.raw,
-        chat,
         ts: stored ? stored.ts : 0,
       };
     }
-    if (stored) return { ...stored, chat };
+    if (stored) return stored;
     return {
       entry: '',
       cases: [blankCase(1)],
@@ -235,7 +279,6 @@ class TestPanel extends React.Component {
       runError: '',
       durationMs: null,
       seededFrom: null,
-      chat,
       ts: 0,
     };
   }
@@ -309,134 +352,6 @@ class TestPanel extends React.Component {
       results: null,
       runError: '',
     }, () => this.run());
-  }
-
-  // ---- The dedicated test-case generation session (chat tab) ----
-
-  sendChat(text) {
-    const file = this.codeFile();
-    const pad = this.pad();
-    if (!file || !pad || this.state.chatSending) return;
-    const instruction = (typeof text === 'string' ? text : this.state.chatInput).trim();
-    if (!instruction) return;
-    const history = (pad.chat || []).slice(-20).map(m => ({
-      role: m.role === 'assistant' ? 'assistant' : 'user',
-      content: m.text,
-    }));
-    const userChat = [...(pad.chat || []), { role: 'user', text: instruction }].slice(-100);
-    this.updatePad({ chat: userChat });
-    this.setState({ chatInput: '', chatSending: true, chatError: '' });
-    const currentCases = pad.cases.map(tc => {
-      try {
-        return { name: tc.name, args: JSON.parse(tc.argsText), expected: JSON.parse(tc.expectedText) };
-      } catch (error) {
-        return null;
-      }
-    }).filter(Boolean);
-    let model;
-    try {
-      model = window.localStorage.getItem('av-ai-model-v1') || undefined;
-    } catch (error) {
-      model = undefined;
-    }
-    AiApi.testChat({
-      language: extension(file.name),
-      code: file.content,
-      entry: pad.entry,
-      context: pageReadme(this.props.current.files),
-      currentCases,
-      history,
-      instruction,
-      model,
-    }).then(({ message, entry, mode, cases }) => {
-      const assistantMsg = { role: 'assistant', text: message || '' };
-      if (Array.isArray(cases) && cases.length) {
-        assistantMsg.cases = cases;
-        assistantMsg.mode = mode === 'replace' ? 'replace' : 'append';
-        assistantMsg.entry = entry || '';
-      }
-      const current = this.pad();
-      const chat = [...((current && current.chat) || []), assistantMsg].slice(-100);
-      this.updatePad({ chat });
-      this.setState({ chatSending: false });
-    }).catch(error => {
-      const data = error && error.response && error.response.data;
-      this.setState({
-        chatSending: false,
-        chatError: (data && data.message) || 'The request failed. Is the server running?',
-      });
-    });
-  }
-
-  applyChatCases(index) {
-    const pad = this.pad();
-    if (!pad) return;
-    const msg = (pad.chat || [])[index];
-    if (!msg || !msg.cases || msg.applied) return;
-    const chat = pad.chat.map((m, i) => i === index ? { ...m, applied: true } : m);
-    this.updatePad({ chat }, () => this.ingestCases(msg.entry, msg.cases, msg.mode));
-  }
-
-  clearChat() {
-    this.updatePad({ chat: [] });
-    this.setState({ chatError: '' });
-  }
-
-  renderChat(pad) {
-    const chat = pad.chat || [];
-    return (
-      <div>
-        {
-          chat.length ? (
-            <div className={styles.chat_top}>
-              <span className={styles.spacer}/>
-              <button className={styles.chat_clear} onClick={() => this.clearChat()}>Clear chat</button>
-            </div>
-          ) : null
-        }
-        <div className={styles.chat_list}>
-          {
-            chat.length === 0 ? (
-              <button className={styles.gen_btn} disabled={this.state.chatSending}
-                      onClick={() => this.sendChat('Generate a good set of test cases for this code.')}>
-                {this.state.chatSending ? 'Generating...' : 'Generate test cases'}
-              </button>
-            ) : chat.map((m, i) => (
-              <div key={i} className={m.role === 'user' ? styles.chat_user : styles.chat_ai}>
-                <div className={styles.chat_text}>{m.text}</div>
-                {
-                  m.cases ? (
-                    <div className={styles.chat_cases}>
-                      <div className={styles.chat_cases_head}>
-                        {m.cases.length} case{m.cases.length === 1 ? '' : 's'} · {m.mode === 'replace' ? 'replaces the list' : 'new cases'}
-                      </div>
-                      <div className={styles.chat_cases_names}>
-                        {m.cases.map(c => c.name).join(' · ')}
-                      </div>
-                      <button className={styles.gen_btn} disabled={m.applied}
-                              onClick={() => this.applyChatCases(i)}>
-                        {m.applied ? 'Applied ✓' : (m.mode === 'replace' ? 'Apply: replace all cases' : 'Apply: add these cases')}
-                      </button>
-                    </div>
-                  ) : null
-                }
-              </div>
-            ))
-          }
-          {this.state.chatSending && chat.length ? <div className={styles.hint}>Thinking...</div> : null}
-        </div>
-        {this.state.chatError ? <pre className={styles.error}>{this.state.chatError}</pre> : null}
-        <div className={styles.chat_input_row}>
-          <input className={styles.value_input} type="text" value={this.state.chatInput}
-                 placeholder="Ask for cases, or follow up: add an empty-input case, make case 2 harder..."
-                 onChange={e => this.setState({ chatInput: e.target.value })}
-                 onKeyDown={e => { if (e.key === 'Enter') this.sendChat(); }}/>
-          <button className={styles.run} disabled={this.state.chatSending} onClick={() => this.sendChat()}>
-            {this.state.chatSending ? '...' : 'Send'}
-          </button>
-        </div>
-      </div>
-    );
   }
 
   // Plays one case in the visualization pane: the pad's code is
@@ -527,46 +442,77 @@ class TestPanel extends React.Component {
     if (this.state.running) return <div className={styles.hint}>Running...</div>;
     if (pad.runError) return <pre className={styles.error}>{pad.runError}</pre>;
     if (!pad.results) {
-      return <div className={styles.hint}>No run yet - press Run and the results show up here, one block per case.</div>;
+      return <div className={styles.hint}>No run yet - press Run and the results show up here.</div>;
     }
+    // Same layout as the Testcase tab: a chips row picks the case,
+    // then the fields of just that case. For a failed case the
+    // Output and Expected boxes carry a diff: the parts that
+    // differ are tinted - red in the actual output, green in the
+    // expected value - so the eye lands on the mismatch.
     const passed = pad.results.filter(r => r.pass).length;
+    const active = Math.max(0, Math.min(pad.active, pad.results.length - 1));
+    const r = pad.results[active];
+    let argsValue = null;
+    try {
+      argsValue = pad.cases[active] ? JSON.parse(pad.cases[active].argsText || '[]') : null;
+    } catch (error) {
+      argsValue = null;
+    }
+    const diff = r.error ? null : diffSegments(JSON.stringify(r.actual), JSON.stringify(r.expected));
     return (
       <div>
         {this.state.vizError ? <pre className={styles.error}>{this.state.vizError}</pre> : null}
         <div className={passed === pad.results.length ? styles.summary_ok : styles.summary_bad}>
           {passed}/{pad.results.length} passed{pad.durationMs != null ? ` · ${pad.durationMs} ms` : ''}
         </div>
+        <div className={styles.chips}>
+          {
+            pad.results.map((rr, i) => (
+              <span key={i} className={`${styles.chip} ${i === active ? styles.chip_active : ''}`}
+                    onClick={() => this.updatePad({ active: i })}>
+                {rr.name}
+                <span className={rr.pass ? styles.dot_ok : styles.dot_bad}> ●</span>
+              </span>
+            ))
+          }
+        </div>
+        <div className={r.pass ? styles.result_name_ok : styles.result_name_bad}>
+          {r.pass ? '✓' : '✗'} {r.name}
+        </div>
+        <div className={styles.field_label}>Input</div>
+        <div className={styles.value_box}>{JSON.stringify(argsValue)}</div>
         {
-          pad.results.map((r, i) => (
-            <div key={i} className={styles.result_case}>
-              <div className={r.pass ? styles.result_name_ok : styles.result_name_bad}>
-                {r.pass ? '✓' : '✗'} {r.name}
-              </div>
-              <div className={styles.field_label}>Input</div>
-              <div className={styles.value_box}>{JSON.stringify(pad.cases[i] ? JSON.parse(pad.cases[i].argsText || '[]') : null)}</div>
-              {
-                r.error
-                  ? <pre className={styles.error}>{r.error}</pre>
-                  : (
-                    <React.Fragment>
-                      <div className={styles.field_label}>Output</div>
-                      <div className={styles.value_box}>{JSON.stringify(r.actual)}</div>
-                    </React.Fragment>
-                  )
-              }
-              <div className={styles.field_label}>Expected</div>
-              <div className={styles.value_box}>{JSON.stringify(r.expected)}</div>
-              {
-                r.stdout
-                  ? <details className={styles.stdout}><summary>stdout</summary><pre>{r.stdout}</pre></details>
-                  : null
-              }
-              <button className={styles.viz_btn} onClick={() => this.visualizeCase(i)}>
-                ▶ Visualize this case
-              </button>
-            </div>
-          ))
+          r.error
+            ? <pre className={styles.error}>{r.error}</pre>
+            : (
+              <React.Fragment>
+                <div className={styles.field_label}>Output</div>
+                <div className={styles.value_box}>
+                  {diff.aSegs.map((seg, i) => seg.changed
+                    ? <span key={i} className={styles.diff_actual}>{seg.text}</span>
+                    : <span key={i}>{seg.text}</span>)}
+                </div>
+              </React.Fragment>
+            )
         }
+        <div className={styles.field_label}>Expected</div>
+        <div className={styles.value_box}>
+          {diff
+            ? diff.bSegs.map((seg, i) => seg.changed
+              ? <span key={i} className={styles.diff_expected}>{seg.text}</span>
+              : <span key={i}>{seg.text}</span>)
+            : JSON.stringify(r.expected)}
+        </div>
+        {
+          r.stdout
+            ? <details className={styles.stdout}><summary>stdout</summary><pre>{r.stdout}</pre></details>
+            : null
+        }
+        <div className={styles.gen_row}>
+          <button className={styles.gen_btn} onClick={() => this.visualizeCase(active)}>
+            ▶ Visualize this case
+          </button>
+        </div>
       </div>
     );
   }
@@ -595,11 +541,6 @@ class TestPanel extends React.Component {
                   onClick={() => this.onTab('result')}>
             &gt;_ Test Result
             {passedCount != null ? ` (${passedCount}/${pad.results.length})` : ''}
-          </button>
-          <button className={`${styles.tab} ${tab === 'chat' ? styles.tab_active : ''}`}
-                  title={pad.open && tab === 'chat' ? 'Click to collapse' : 'Click to expand'}
-                  onClick={() => this.onTab('chat')}>
-            ✦ AI Test Cases
           </button>
           <span className={styles.spacer}/>
           {file ? <span className={styles.code_label}>{file.name}</span> : null}
@@ -651,8 +592,7 @@ class TestPanel extends React.Component {
                     </div>
                     {this.state.vizError ? <pre className={styles.error}>{this.state.vizError}</pre> : null}
                   </div>
-                ) : tab === 'chat' ? this.renderChat(pad)
-                : this.renderResults(pad)
+                ) : this.renderResults(pad)
               }
             </div>
           ) : null

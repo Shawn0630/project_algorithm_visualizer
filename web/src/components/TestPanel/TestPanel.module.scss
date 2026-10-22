@@ -229,33 +229,40 @@
     margin-bottom: 6px;
   }
 
-  .result_case {
-    padding: 6px 0 10px;
+  .result_name_ok {
+    color: $color-active;
+    font-weight: 600;
+    margin: 8px 0 2px;
+  }
 
-    & + .result_case {
-      border-top: 1px solid $color-border;
+  .result_name_bad {
+    color: #ff8080;
+    font-weight: 600;
+    margin: 8px 0 2px;
+  }
+
+  .stdout {
+    margin-top: 8px;
+    opacity: .8;
+
+    pre {
+      white-space: pre-wrap;
+      font-family: $font-family-monospace;
+      font-size: $font-size-normal;
     }
+  }
 
-    .result_name_ok {
-      color: $color-active;
-      font-weight: 600;
-    }
+  // The diff tints in the results view: what the code actually
+  // returned that should not be there (red) vs what was expected
+  // that did not come back (green).
+  .diff_actual {
+    background-color: rgba(255, 92, 92, .35);
+    border-radius: 2px;
+  }
 
-    .result_name_bad {
-      color: #ff8080;
-      font-weight: 600;
-    }
-
-    .stdout {
-      margin-top: 8px;
-      opacity: .8;
-
-      pre {
-        white-space: pre-wrap;
-        font-family: $font-family-monospace;
-        font-size: $font-size-normal;
-      }
-    }
+  .diff_expected {
+    background-color: rgba(64, 192, 110, .35);
+    border-radius: 2px;
   }
 
   .error {

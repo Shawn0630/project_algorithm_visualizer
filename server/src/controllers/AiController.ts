@@ -5,6 +5,7 @@ import { appendAiCall } from 'utils/aiCallLog';
 import { checkSyntax } from 'utils/syntaxCheck';
 import { tracerReference } from 'utils/tracerDocs';
 import { dryRunVisualization } from 'utils/dryRun';
+import { validateApiUsage } from 'utils/apiSurface';
 import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
 
@@ -781,6 +782,44 @@ export class AiController extends Controller {  constructor(server: Server) {
           };
         }
       }
+      // Static API-surface validation: the tracer reference is in
+      // the prompt, yet models still misuse it in ways that
+      // compile and run - Array2DTracer's 4-argument select on an
+      // Array1DTracer, an invented method, a duplicated import.
+      // Every tracer call in the proposal is checked against the
+      // real library surface (parsed from the library sources);
+      // violations get one repair round quoting exactly what is
+      // wrong, and anything left over rides along as apiError so
+      // the UI can show it with a fix-it action.
+      let apiError: string | null = null;
+      const dryRunLanguage = String(language || 'js');
+      if (changed && ['py', 'js', 'java'].includes(dryRunLanguage)) {
+        let violations = await validateApiUsage(dryRunLanguage, reply.code);
+        if (violations.length) {
+          const retryContent = await callModel([
+            ...messages,
+            {role: 'assistant', content},
+            {
+              role: 'user',
+              content: `Your code misuses this app's tracer library - the API check flagged these problems:\n${violations.map(v => `- ${v}`).join('\n')}\nFix them and return the COMPLETE file again, using only the methods in the reference, each with the argument count the reference shows for that exact tracer class.`,
+            },
+          ], usedModel || primaryModel!);
+          if (retryContent !== null) {
+            const retryReply = parseReply(retryContent);
+            content = retryContent;
+            reply = retryReply;
+            changed = reply.code !== code;
+            violations = await validateApiUsage(dryRunLanguage, reply.code);
+          }
+          if (violations.length) {
+            apiError = violations.join('\n');
+            reply = {
+              ...reply,
+              explanation: `Warning: this code misuses the tracer library (see the API check below). ${reply.explanation}`,
+            };
+          }
+        }
+      }
       // Dry-run validation: when the proposal uses the tracer
       // library, actually run it (the same machinery a Build uses)
       // before handing it over - a syntax check cannot see a
@@ -790,7 +829,6 @@ export class AiController extends Controller {  constructor(server: Server) {
       // error rides along so the UI can show it and offer the
       // fix-it action.
       let runError: string | null = null;
-      const dryRunLanguage = String(language || 'js');
       // Trigger when either side mentions the visualization
       // library - a pure class/function file on either side of
       // the edit is exactly the "runs but shows nothing" failure.
@@ -828,7 +866,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       // Check the proposal compiles before the user is asked to review
       // it; a broken proposal is labelled, not silently handed over.
       const syntax = changed ? await checkSyntax(String(language || 'js'), reply.code) : null;
-      const fullReply = {...reply, changed, partialSuspected, runError: runError || undefined};
+      const fullReply = {...reply, changed, partialSuspected, runError: runError || undefined, apiError: apiError || undefined};
       logCall({status: 'ok', rawResponse: content, elidedFirstAttempt, reply: fullReply, syntax});
       return res.json({...fullReply, syntax});
     } catch (error) {

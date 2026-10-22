@@ -48,7 +48,10 @@ class CodeEditor extends React.Component {
   }
 
   handleResize() {
-    this.aceEditorRef.current.resize();
+    // The Ace editor only exists while a code file is open; the
+    // App calls this on every layout change, including states
+    // where no editor is mounted.
+    if (this.aceEditorRef.current) this.aceEditorRef.current.resize();
   }
 
   // Selecting a language replaces the current file with that

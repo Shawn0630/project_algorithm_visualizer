@@ -1,7 +1,7 @@
 import React from 'react';
 import { connect } from 'react-redux';
 import { actions } from 'reducers';
-import { AiApi } from 'apis';
+import { AiApi, PadTestsApi } from 'apis';
 import { extension, aiPadKey, AI_SESSION_DELETE_EVENT, TESTCASES_APPLY_EVENT } from 'common/util';
 import { computeHunks, applyHunks } from './diff';
 import styles from './AiAssistant.module.scss';
@@ -18,6 +18,15 @@ import styles from './AiAssistant.module.scss';
 // editor only when the user accepts it; rejecting it, or simply asking
 // a follow-up, keeps the conversation going with the proposal folded
 // into the history so the AI knows what happened to it.
+//
+// The pane has two tabs per pad: this Code AI, and Test Cases - the
+// test-case generation chat that used to live inside the Testcase
+// panel. Both AIs sit side by side here, one tab each, keyed by the
+// same pad. The test chat's messages live in the pad's pad_tests
+// database record (its `chat` field, merged partially server-side,
+// so the Testcase panel's case edits and this chat never clobber
+// each other); Apply dispatches TESTCASES_APPLY_EVENT and the
+// Testcase panel drops the cases into its list and runs them.
 const CODE_EXTS = ['js', 'java', 'py', 'cpp'];
 const STORAGE_KEY = 'av-ai-sessions-v1';
 const MODEL_KEY = 'av-ai-model-v1';
@@ -64,14 +73,26 @@ function saveSessions(sessions) {
 
 const emptySession = () => ({ messages: [], pending: null });
 
+// The page's problem statement for the test-case chat: the first
+// Readme (or other Markdown doc, LICENSE excluded), length-capped.
+function pageReadme(files) {
+  const docs = (files || []).filter(f => /\.md$/i.test(f.name) && !/license/i.test(f.name));
+  const readme = docs.find(f => /readme/i.test(f.name)) || docs[0];
+  return readme ? String(readme.content || '').slice(0, 8000) : '';
+}
+
 class AiAssistant extends React.Component {
   constructor(props) {
     super(props);
     this.state = {
       sessions: loadSessions(), instruction: '', busy: false, error: '',
       models: [], selectedModel: loadModelPref(),
+      activeTab: 'code',
+      testChats: {}, testInput: '', testSending: false, testError: '',
     };
     this.logRef = React.createRef();
+    this.testLoadedKeys = new Set();
+    this.testPersistTimers = {};
   }
 
   componentDidUpdate(prevProps, prevState) {
@@ -81,6 +102,12 @@ class AiAssistant extends React.Component {
         this.logRef.current.scrollTop = this.logRef.current.scrollHeight;
       }
     }
+    if (prevState.testChats !== this.state.testChats && this.logRef.current) {
+      this.logRef.current.scrollTop = this.logRef.current.scrollHeight;
+    }
+    // The Test Cases tab reads its chat from the pad_tests record;
+    // load it the first time a pad's tab is shown.
+    if (this.state.activeTab === 'tests') this.ensureTestChat();
   }
 
   componentDidMount() {
@@ -230,7 +257,7 @@ class AiAssistant extends React.Component {
           } : undefined;
         })(),
       },
-    }).then(({ code, explanation, changed, syntax, partialSuspected, testCases, entry, runError }) => {
+    }).then(({ code, explanation, changed, syntax, partialSuspected, testCases, entry, runError, apiError }) => {
       this.setState({ busy: false });
       // The third kind of AI result: a set of test cases riding
       // along with the reply. It is offered as its own apply action
@@ -245,6 +272,7 @@ class AiAssistant extends React.Component {
           pending: {
             code, explanation: explanation || '', syntax: syntax || null, partialSuspected: !!partialSuspected, hunks,
             runError: runError || null,
+            apiError: apiError || null,
             testCases: cases, testEntry: entry || '', casesApplied: false,
           },
         }, key);
@@ -348,6 +376,163 @@ class AiAssistant extends React.Component {
     this.updateSession({ pending: { ...session.pending, casesApplied: true } });
   }
 
+  // ---- Test Cases tab: the per-pad generation chat ----
+  // Messages are {role: 'user'|'assistant', text, cases?, mode?,
+  // entry?, applied?}; they persist in the pad_tests record's
+  // chat field (partial merge server-side).
+
+  testChat() {
+    const key = this.padKey();
+    return (key && this.state.testChats[key]) || [];
+  }
+
+  ensureTestChat() {
+    const key = this.padKey();
+    if (!key || this.testLoadedKeys.has(key)) return;
+    this.testLoadedKeys.add(key);
+    PadTestsApi.list().then(({ entries }) => {
+      const record = entries ? entries[key] : null;
+      this.setState(prev => prev.testChats[key]
+        ? prev
+        : { testChats: { ...prev.testChats, [key]: (record && Array.isArray(record.chat)) ? record.chat : [] } });
+    }).catch(() => {
+      this.setState(prev => prev.testChats[key]
+        ? prev
+        : { testChats: { ...prev.testChats, [key]: [] } });
+    });
+  }
+
+  updateTestChat(messages, key = this.padKey()) {
+    if (!key) return;
+    this.setState(prev => ({ testChats: { ...prev.testChats, [key]: messages } }));
+    window.clearTimeout(this.testPersistTimers[key]);
+    this.testPersistTimers[key] = window.setTimeout(() => {
+      PadTestsApi.put({ key, chat: messages }).catch(() => {});
+    }, 500);
+  }
+
+  sendTestChat(preset) {
+    const { editingFile, files } = this.props.current;
+    const key = this.padKey();
+    if (!editingFile || !key) return;
+    const instruction = (preset !== undefined ? preset : this.state.testInput).trim();
+    if (!instruction || this.state.testSending) return;
+    const prior = this.testChat();
+    const history = prior.slice(-20).map(m => ({ role: m.role, content: m.text }));
+    const working = [...prior, { role: 'user', text: instruction }].slice(-100);
+    this.updateTestChat(working);
+    this.setState({ testInput: '', testSending: true, testError: '' });
+    // The pad's current entry + cases live in the Testcase panel's
+    // record; re-read it fresh so the AI refines what the panel
+    // actually shows, not a stale copy.
+    const freshRecord = PadTestsApi.list()
+      .then(({ entries }) => (entries ? entries[key] : null) || null)
+      .catch(() => null);
+    freshRecord.then(record => {
+      const currentCases = [];
+      for (const tc of (record && record.cases) || []) {
+        try {
+          currentCases.push({ name: tc.name, args: JSON.parse(tc.argsText), expected: JSON.parse(tc.expectedText) });
+        } catch (error) {
+          // Unparseable editor text: leave that case out.
+        }
+      }
+      return AiApi.testChat({
+        language: extension(editingFile.name),
+        code: editingFile.content,
+        entry: (record && record.entry) || '',
+        context: pageReadme(files),
+        currentCases,
+        history,
+        instruction,
+        model: this.state.selectedModel || undefined,
+      });
+    }).then(({ message, entry, mode, cases }) => {
+      const next = [...working, {
+        role: 'assistant',
+        text: message || '',
+        cases: (cases && cases.length) ? cases : undefined,
+        mode: mode === 'replace' ? 'replace' : 'append',
+        entry: entry || '',
+        applied: false,
+      }].slice(-100);
+      this.updateTestChat(next, key);
+      this.setState({ testSending: false });
+    }).catch(error => {
+      this.setState({ testSending: false, testError: (error && error.message) || 'The AI request failed.' });
+    });
+  }
+
+  applyTestChatCases(index) {
+    const messages = this.testChat();
+    const message = messages[index];
+    if (!message || !message.cases) return;
+    const key = this.padKey();
+    window.dispatchEvent(new CustomEvent(TESTCASES_APPLY_EVENT, {
+      detail: { key, entry: message.entry || '', mode: message.mode || 'append', cases: message.cases },
+    }));
+    this.updateTestChat(messages.map((m, i) => i === index ? { ...m, applied: true } : m));
+  }
+
+  clearTestChat() {
+    this.updateTestChat([]);
+  }
+
+  renderTestChat() {
+    const messages = this.testChat();
+    const { testSending } = this.state;
+    return (
+      <React.Fragment>
+        {
+          messages.length === 0 && !testSending ? (
+            <div>
+              <div className={styles.text}>
+                A dedicated session for generating test cases for this pad. It sees the code, the problem statement, and the panel's current cases; ask for more, or follow up to refine ("add an empty-array case", "replace them all with larger inputs"). Returned cases are offered with an Add button - adding them puts them in the Testcase panel and runs them.
+              </div>
+              <button className={styles.chip} onClick={() => this.sendTestChat('Generate a first set of test cases for this code.')}>
+                ✦ Generate test cases
+              </button>
+            </div>
+          ) : null
+        }
+        {
+          messages.map((message, i) => (
+            message.role === 'user' ? (
+              <div key={i} className={styles.user_message}>{message.text}</div>
+            ) : (
+              <div key={i} className={styles.ai_message}>
+                <div className={styles.text}>{message.text}</div>
+                {
+                  message.cases ? (
+                    <div className={styles.test_card}>
+                      <div className={styles.test_card_title}>
+                        {message.cases.length} test case(s) - {message.mode === 'replace' ? 'replaces the panel list' : 'adds to the panel list'}
+                      </div>
+                      {
+                        message.cases.map((tc, j) => (
+                          <div key={j} className={styles.test_case_line}>
+                            <b>{tc.name || `Case ${j + 1}`}</b>
+                            <span> args: {JSON.stringify(tc.args)}</span>
+                            <span> → {JSON.stringify(tc.expected)}</span>
+                          </div>
+                        ))
+                      }
+                      <button className={styles.chip} disabled={message.applied}
+                              onClick={() => this.applyTestChatCases(i)}>
+                        {message.applied ? '✓ Added to the Testcase panel' : 'Add to Testcase panel'}
+                      </button>
+                    </div>
+                  ) : null
+                }
+              </div>
+            )
+          ))
+        }
+        {testSending ? <div className={styles.ai_message}>Thinking...</div> : null}
+      </React.Fragment>
+    );
+  }
+
   // The card for a reply's test cases: the cases themselves plus
   // the apply action. Scratch papers have no Testcase panel, so
   // their card is read-only.
@@ -392,6 +577,12 @@ class AiAssistant extends React.Component {
     this.send(`The code in your previous reply was run and did not produce a working visualization:\n${session.pending.runError}\nFix it and return the complete file again: import the tracer library, define every tracer variable you use, set the layout root exactly once, and if the file only defines a class or functions, append a driver section that creates the tracers and actually calls the code.`);
   }
 
+  sendFixApi() {
+    const session = this.session();
+    if (!session.pending || !session.pending.apiError) return;
+    this.send(`The code in your previous reply misuses this app's tracer library - the API check flagged these problems:\n${session.pending.apiError}\nFix them and return the complete file again, using only the methods in the reference, each with the argument count the reference shows for that exact tracer class.`);
+  }
+
   clearSession() {
     this.updateSession(emptySession());
   }
@@ -423,6 +614,15 @@ class AiAssistant extends React.Component {
                 <button className={styles.chip} onClick={() => this.sendFixSyntax()}>Fix this with AI</button>
               </div>
             )
+          ) : null
+        }
+        {
+          pending.apiError ? (
+            <div className={styles.syntax_bad}>
+              <div>⚠ API check failed - the tracer-library check flagged these problems:</div>
+              <pre className={styles.code}>{pending.apiError}</pre>
+              <button className={styles.chip} onClick={() => this.sendFixApi()}>Fix this with AI</button>
+            </div>
           ) : null
         }
         {
@@ -479,15 +679,23 @@ class AiAssistant extends React.Component {
   render() {
     const { editingFile } = this.props.current;
     const isCode = !!editingFile && CODE_EXTS.includes(extension(editingFile.name));
-    const { instruction, busy, error } = this.state;
+    const { instruction, busy, error, activeTab, testInput, testSending, testError } = this.state;
     const session = this.session();
     const hasSession = session.messages.length > 0 || session.pending;
+    const inTests = activeTab === 'tests';
+    const chat = this.testChat();
 
     return (
       <div className={styles.ai_assistant}>
         <div className={styles.row}>
           <span className={styles.title}>AI Assistant</span>
-          {hasSession ? (
+          {inTests ? (
+            chat.length ? (
+              <button className={styles.chip} disabled={testSending} onClick={() => this.clearTestChat()}>
+                Clear chat
+              </button>
+            ) : null
+          ) : hasSession ? (
             <button className={styles.chip} disabled={busy} onClick={() => this.clearSession()}>
               Clear session
             </button>
@@ -500,20 +708,30 @@ class AiAssistant extends React.Component {
           this.state.models.length ? (
             <div className={styles.model_row}>
               <span>Model</span>
-              <select className={styles.model_select} value={this.state.selectedModel} disabled={busy}
+              <select className={styles.model_select} value={this.state.selectedModel} disabled={busy || testSending}
                       onChange={e => this.pickModel(e.target.value)}>
                 {this.state.models.map(model => <option key={model} value={model}>{model}</option>)}
               </select>
             </div>
           ) : null
         }
+        <div className={styles.tab_row}>
+          <button className={`${styles.ai_tab} ${!inTests ? styles.ai_tab_active : ''}`}
+                  onClick={() => this.setState({ activeTab: 'code' })}>
+            Code AI
+          </button>
+          <button className={`${styles.ai_tab} ${inTests ? styles.ai_tab_active : ''}`}
+                  onClick={() => this.setState({ activeTab: 'tests' })}>
+            ✦ Test Cases
+          </button>
+        </div>
         <div className={styles.log} ref={this.logRef}>
           {
             !isCode ? (
               <div className={styles.empty_state}>
                 The current file is not a code file. Switch to a code file (.js / .java / .py / .cpp) to see its AI session here.
               </div>
-            ) : !hasSession && !busy ? (
+            ) : inTests ? this.renderTestChat() : !hasSession && !busy ? (
               <div className={styles.empty_state}>
                 This is the AI session for {editingFile.name}. Each file has its own session, and sessions are remembered. Ask the AI to write code, add tracers, explain, or find bugs - its changes arrive as a diff proposal first, and only the hunks you keep are applied to the editor.
               </div>
@@ -545,18 +763,39 @@ class AiAssistant extends React.Component {
             )
           }
         </div>
-        <div className={styles.row}>
-          <input className={styles.input} type="text" value={instruction} disabled={!isCode}
-                 placeholder="Tell the AI what to do with this code, e.g. turn bubble sort into quicksort"
-                 onChange={e => this.setState({ instruction: e.target.value })}
-                 onKeyDown={e => {
-                   if (e.key === 'Enter') this.send();
-                 }}/>
-          <button className={styles.send} disabled={busy || !isCode || !instruction.trim()} onClick={() => this.send()}>
-            {busy ? 'Working...' : 'Send'}
-          </button>
-        </div>
-        {error ? <div className={styles.error}>{error}</div> : null}
+        {
+          inTests ? (
+            <React.Fragment>
+              <div className={styles.row}>
+                <input className={styles.input} type="text" value={testInput} disabled={!isCode}
+                       placeholder="Ask for test cases, e.g. add an empty-array case"
+                       onChange={e => this.setState({ testInput: e.target.value })}
+                       onKeyDown={e => {
+                         if (e.key === 'Enter') this.sendTestChat();
+                       }}/>
+                <button className={styles.send} disabled={testSending || !isCode || !testInput.trim()} onClick={() => this.sendTestChat()}>
+                  {testSending ? 'Working...' : 'Send'}
+                </button>
+              </div>
+              {testError ? <div className={styles.error}>{testError}</div> : null}
+            </React.Fragment>
+          ) : (
+            <React.Fragment>
+              <div className={styles.row}>
+                <input className={styles.input} type="text" value={instruction} disabled={!isCode}
+                       placeholder="Tell the AI what to do with this code, e.g. turn bubble sort into quicksort"
+                       onChange={e => this.setState({ instruction: e.target.value })}
+                       onKeyDown={e => {
+                         if (e.key === 'Enter') this.send();
+                       }}/>
+                <button className={styles.send} disabled={busy || !isCode || !instruction.trim()} onClick={() => this.send()}>
+                  {busy ? 'Working...' : 'Send'}
+                </button>
+              </div>
+              {error ? <div className={styles.error}>{error}</div> : null}
+            </React.Fragment>
+          )
+        }
       </div>
     );
   }
