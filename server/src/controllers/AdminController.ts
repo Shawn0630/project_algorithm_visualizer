@@ -292,7 +292,7 @@ export class AdminController extends Controller {
     if (!slug) return res.status(400).json({message: 'Paste a LeetCode problem URL or its slug (e.g. two-sum).'});
     const query = `query questionData($titleSlug: String!) {
       question(titleSlug: $titleSlug) {
-        questionFrontendId title titleSlug difficulty content
+        questionFrontendId title titleSlug difficulty content isPaidOnly
         topicTags { name }
         codeSnippets { lang langSlug code }
         exampleTestcases
@@ -309,13 +309,26 @@ export class AdminController extends Controller {
       });
       const question = data && data.data && data.data.question;
       if (!question) return res.status(404).json({message: `LeetCode has no problem with slug "${slug}".`});
+      const markdown = htmlToMarkdown(question.content || '');
+      if (!markdown) {
+        // LeetCode's public API serves no statement text for
+        // paid-only problems without a login (content comes back
+        // null while title and snippets still arrive) - the
+        // import used to "succeed" with an empty README and then
+        // fail confusingly at the AI-format step. Say so here.
+        return res.status(422).json({
+          message: question.isPaidOnly
+            ? `"${question.title}" is a LeetCode premium (paid-only) problem: LeetCode's public API returns no statement for it without a login, so it cannot be imported this way.`
+            : `LeetCode returned an empty statement for "${question.title}" - nothing to import.`,
+        });
+      }
       return res.json({
         frontendId: question.questionFrontendId,
         title: question.title,
         slug: question.titleSlug,
         difficulty: question.difficulty,
         topics: (question.topicTags || []).map((tag: any) => tag.name),
-        markdown: htmlToMarkdown(question.content || ''),
+        markdown,
         snippets: (question.codeSnippets || []).map((snippet: any) => ({lang: snippet.lang, langSlug: snippet.langSlug, code: snippet.code})),
         exampleTestcases: question.exampleTestcases || '',
       });
@@ -332,8 +345,11 @@ export class AdminController extends Controller {
   // statement examples. Same call chain (and log) as the assistant.
   generateLeetcode = async (req: express.Request, res: express.Response) => {
     const {title, markdown, exampleTestcases, model} = req.body || {};
-    if (typeof title !== 'string' || !title || typeof markdown !== 'string' || !markdown) {
-      return res.status(400).json({message: 'Fetch a problem first (title and markdown are required).'});
+    if (typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({message: 'The title field is empty - fetch a problem first, or type the title in.'});
+    }
+    if (typeof markdown !== 'string' || !markdown.trim()) {
+      return res.status(400).json({message: 'The problem statement is empty - fetch a problem first, or paste the statement into the README box.'});
     }
     const startedAt = Date.now();
     const messages = [

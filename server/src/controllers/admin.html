@@ -306,7 +306,7 @@ $('btnAiFormat').onclick = async () => {
     const model = localStorage.getItem('av-ai-model-v1') || undefined;
     const data = await api('POST', '/api/admin/leetcode/generate', {
       title: $('impTitle').value.trim(),
-      markdown: imp.fetched.markdown,
+      markdown: $('impReadme').value,
       exampleTestcases: imp.fetched.exampleTestcases,
       model,
     });
