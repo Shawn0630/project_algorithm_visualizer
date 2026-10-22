@@ -26,6 +26,30 @@ import { createKey } from 'utils/hierarchy';
 import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
 
+// Imported starter code (LeetCode snippets, hand-pasted files)
+// arrives WITHOUT the tracer library import - LeetCode code
+// never has one - so a pad created from it cannot reference any
+// tracer until the user adds the import by hand (Python only
+// seemed fine because its launcher pre-imports the library).
+// Saving through the admin therefore prepends the import line
+// for code files that lack it, the same line the app's own
+// skeletons carry. Files that already import the library, and
+// non-code files, pass through untouched.
+const TRACER_IMPORT_BY_EXT: { [ext: string]: { marker: RegExp, line: string } } = {
+  java: { marker: /org\.algorithm_visualizer/, line: 'import org.algorithm_visualizer.*;' },
+  js: { marker: /require\(\s*['"]algorithm-visualizer['"]\)|from\s+['"]algorithm-visualizer['"]/, line: "const { Tracer, Array1DTracer, Array2DTracer, LogTracer, ChartTracer, GraphTracer, Layout, HorizontalLayout, VerticalLayout } = require('algorithm-visualizer');" },
+  py: { marker: /\balgorithm_visualizer\b/, line: 'from algorithm_visualizer import *' },
+  cpp: { marker: /algorithm[-_]visualizer/, line: '#include "algorithm-visualizer.h"' },
+};
+
+function ensureTracerImport(name: string, content: string): string {
+  if (!content.trim()) return content;
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+  const spec = TRACER_IMPORT_BY_EXT[ext];
+  if (!spec || spec.marker.test(content)) return content;
+  return `${spec.line}\n\n${content}`;
+}
+
 // Admin console, served at /api/admin (page) with JSON endpoints under
 // /api/admin/*. Content lives in the SQLite store (utils/db): the
 // content endpoints below are addressed the way the UI thinks -
@@ -391,7 +415,7 @@ export class AdminController extends Controller {
       }
       total += file.content.length;
       if (total > 4 * 1024 * 1024) return res.status(400).json({message: 'Files are too large in total (over 4 MB).'});
-      files.push({name: file.name, content: file.content});
+      files.push({name: file.name, content: ensureTracerImport(file.name, file.content)});
     }
     if (body.tests && typeof body.tests === 'object') {
       const cases = validCases(body.tests.cases);
