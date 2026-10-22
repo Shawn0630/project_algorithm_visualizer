@@ -60,6 +60,16 @@ const TESTCASES_APPLY_EVENT = 'av-testcases-apply';
 // viewer also listens, to leave Markdown-doc mode for the playback.
 const VISUALIZE_CASE_EVENT = 'av-visualize-case';
 
+// Something outside the workspace panes changed the code editor's
+// box (the Testcase panel opened or collapsed, so the editor grew
+// or shrank): Ace must be told to resize, or its scrollbar layers
+// stay at the stale offset and float over the layout.
+const LAYOUT_CHANGED_EVENT = 'av-layout-changed';
+
+const notifyLayoutChanged = () => {
+  window.dispatchEvent(new CustomEvent(LAYOUT_CHANGED_EVENT));
+};
+
 const notifyAiSessionDeleted = (current, fileName) => {
   window.dispatchEvent(new CustomEvent(AI_SESSION_DELETE_EVENT, { detail: aiPadKey(current, fileName) }));
 };
@@ -77,5 +87,7 @@ export {
   AI_SESSION_DELETE_EVENT,
   TESTCASES_APPLY_EVENT,
   VISUALIZE_CASE_EVENT,
+  LAYOUT_CHANGED_EVENT,
+  notifyLayoutChanged,
   notifyAiSessionDeleted,
 };

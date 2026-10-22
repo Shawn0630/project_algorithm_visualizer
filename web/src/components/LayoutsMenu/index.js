@@ -5,19 +5,39 @@ import { classes } from 'common/util';
 import { BUILTIN_LAYOUTS, PANE_NAMES, sameLayout } from 'common/layouts';
 import styles from './LayoutsMenu.module.scss';
 
-// The workspace layout picker (in the header, modelled on
-// LeetCode's): preset cards with a mini pane diagram, the user's
-// saved layouts, and Save Current Layout. A layout is just the
-// workspace's {visibles, weights}; App owns the state, this
-// component only renders the picker and reports choices.
+// The workspace layout picker. Layouts are designed around this
+// app's own panes, not borrowed from another product:
+//   Default - the native strip (Navigator / Visualization /
+//     Editor / AI Assistant), AI closed.
+//   Focus - a 2x2 grid: problem Markdown top-left, Visualization
+//     bottom-left, code pad top-right, Testcase panel bottom-
+//     right (starting collapsed).
+//   AI - the strip with the AI Assistant open on the right.
+// The user can snapshot the current arrangement (either mode)
+// under their own name. The popover is positioned fixed, anchored
+// to the button: the header clips overflow, so an absolutely
+// positioned popover inside it gets cut off.
 class LayoutsMenu extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { open: false, saving: false, name: '' };
+    this.state = { open: false, anchor: null, saving: false, name: '' };
   }
 
   toggle(open = !this.state.open) {
-    this.setState({ open, saving: false, name: '' });
+    if (open) {
+      const rect = this.rootEl ? this.rootEl.getBoundingClientRect() : null;
+      this.setState({
+        open: true,
+        saving: false,
+        name: '',
+        anchor: rect ? {
+          top: rect.bottom + 6,
+          right: Math.max(8, document.documentElement.clientWidth - rect.right),
+        } : null,
+      });
+    } else {
+      this.setState({ open: false, saving: false, name: '' });
+    }
   }
 
   apply(layout) {
@@ -32,7 +52,9 @@ class LayoutsMenu extends React.Component {
     this.toggle(false);
   }
 
-  diagram(layout) {
+  // Strip diagram: one bar per pane; hidden panes are faint
+  // slivers. Labels keep the four bars readable.
+  stripDiagram(layout) {
     return (
       <div className={styles.diagram}>
         {
@@ -40,11 +62,43 @@ class LayoutsMenu extends React.Component {
             <div key={i}
                  title={PANE_NAMES[i]}
                  className={classes(styles.pane, !visible && styles.pane_hidden)}
-                 style={visible ? { flexGrow: layout.weights[i] } : null}/>
+                 style={visible ? { flexGrow: layout.weights[i] } : null}>
+              <span className={styles.pane_label}>{['Nav', 'Viz', 'Code', 'AI'][i]}</span>
+            </div>
           ))
         }
       </div>
     );
+  }
+
+  // Focus diagram: the actual 2x2 grid - left column Markdown over
+  // Visualization, right column Code over Testcase.
+  focusDiagram(layout) {
+    const { cols, rows } = layout.focus;
+    return (
+      <div className={styles.diagram}>
+        <div className={styles.focus_col} style={{ flexGrow: cols[0] }}>
+          <div className={styles.pane} style={{ flexGrow: rows[0] }} title="Problem Markdown">
+            <span className={styles.pane_label}>MD</span>
+          </div>
+          <div className={styles.pane} style={{ flexGrow: rows[1] }} title="Visualization">
+            <span className={styles.pane_label}>Viz</span>
+          </div>
+        </div>
+        <div className={styles.focus_col} style={{ flexGrow: cols[1] }}>
+          <div className={styles.pane} style={{ flexGrow: 2 }} title="Code pad">
+            <span className={styles.pane_label}>Code</span>
+          </div>
+          <div className={styles.pane} style={{ flexGrow: 1 }} title="Test cases">
+            <span className={styles.pane_label}>Test</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  diagram(layout) {
+    return layout.mode === 'focus' ? this.focusDiagram(layout) : this.stripDiagram(layout);
   }
 
   card(layout, custom) {
@@ -72,19 +126,30 @@ class LayoutsMenu extends React.Component {
 
   render() {
     const { customLayouts } = this.props;
-    const { open, saving, name } = this.state;
+    const { open, anchor, saving, name } = this.state;
+    const customs = customLayouts || [];
     return (
-      <div className={styles.layouts_menu}>
+      <div className={styles.layouts_menu} ref={el => { this.rootEl = el; }}>
         <Button icon={faColumns} primary selected={open} onClick={() => this.toggle()}>Layouts</Button>
         {
           open ? (
             <React.Fragment>
               <div className={styles.overlay} onClick={() => this.toggle(false)}/>
-              <div className={styles.popover}>
+              <div className={styles.popover}
+                   style={anchor ? { top: anchor.top, right: anchor.right } : null}>
                 <div className={styles.grid}>
                   {BUILTIN_LAYOUTS.map(layout => this.card(layout, false))}
-                  {(customLayouts || []).map(layout => this.card(layout, true))}
                 </div>
+                {
+                  customs.length ? (
+                    <React.Fragment>
+                      <div className={styles.section}>My layouts</div>
+                      <div className={styles.grid}>
+                        {customs.map(layout => this.card(layout, true))}
+                      </div>
+                    </React.Fragment>
+                  ) : null
+                }
                 {
                   saving ? (
                     <div className={styles.save_row}>

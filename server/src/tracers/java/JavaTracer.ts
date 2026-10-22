@@ -6,6 +6,7 @@ import fs from 'fs-extra';
 import { Release, Tracer } from 'tracers/Tracer';
 import { timeLimit } from 'config/constants';
 import { codesDir } from 'config/paths';
+import { ensureJavaLibrary, execFileChecked, javaClasspath } from 'utils/javaLibrary';
 
 // Java runs locally, like Python: user code is compiled with javac
 // against the vendored tracers.java library (repo-root tracers.java/,
@@ -17,100 +18,56 @@ import { codesDir } from 'config/paths';
 // NOTE: a subprocess is not a sandbox. Do not expose this server publicly
 // without putting the Java execution behind Docker first.
 export class JavaTracer extends Tracer {
-  private readonly librarySourceDir: string;
-  private readonly libraryClassesDir: string;
-  private readonly gsonJar: string;
-  private libraryBuild: Promise<void> | null = null;
-
   constructor() {
     super('java');
-    // __dirname is server/src/tracers/java; the repo root is four levels up.
-    const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
-    this.librarySourceDir = path.resolve(repoRoot, 'tracers.java', 'src', 'main', 'java', 'org', 'algorithm_visualizer');
-    this.libraryClassesDir = path.resolve(codesDir, '.tracers-java-classes');
-    this.gsonJar = path.resolve(__dirname, 'lib', 'gson-2.8.5.jar');
   }
 
   build(release: Release) {
     // Nothing to build ahead of time: the library is compiled lazily on
-    // the first request (see ensureLibrary) and cached under codesDir.
+    // the first request (see utils/javaLibrary) and cached under codesDir.
     return Promise.resolve();
   }
 
   async update() {
-    // The Java library is vendored in this repo (tracers.java/), so there
-    // is no upstream release to track; skipping the base class's GitHub
-    // fetch also keeps boot free of network calls for this tracer.
+    // The Java library is vendored in this repo (tracers.java/), so there is
+    // no upstream release to track; skipping the base class's GitHub fetch
+    // also keeps boot free of network calls for this tracer.
     return Promise.resolve();
   }
 
   route(router: express.Router) {
     router.post(`/${this.lang}`, (req, res, next) => {
       const {code} = req.body;
+      // The file runs as Main.java / class Main: with no Main class
+      // there is nothing to execute, and the JVM's error for that is
+      // cryptic - say it plainly instead.
+      if (!/\bclass\s+Main\b/.test(code || '')) {
+        return next(new Error('This Java file defines no Main class, so there is nothing to run: Java visualizations run as Main.java (class Main) with a public static void main that creates the tracers, sets the layout root once and calls the code. A file that only defines class Solution has no entry point - exercise it from the Testcase panel, or add a Main driver.'));
+      }
       const tempPath = path.resolve(codesDir, uuid.v4());
       fs.outputFile(path.resolve(tempPath, 'Main.java'), code)
-        .then(() => this.ensureLibrary())
-        .then(() => this.execFileChecked(
+        .then(() => ensureJavaLibrary())
+        .then(() => execFileChecked(
           process.env.JAVAC_BIN || 'javac',
-          ['-cp', this.classpath(), '-d', tempPath, path.resolve(tempPath, 'Main.java')],
+          ['-cp', javaClasspath(), '-d', tempPath, path.resolve(tempPath, 'Main.java')],
           {timeout: 30000},
           'Java compiler (javac) not found. Install a JDK and make sure javac is on the PATH, or set JAVAC_BIN.',
         ))
-        .then(() => this.execFileChecked(
+        .then(() => execFileChecked(
           process.env.JAVA_BIN || 'java',
-          ['-cp', this.classpath(tempPath), 'Main'],
+          ['-cp', javaClasspath(tempPath), 'Main'],
           {cwd: tempPath, env: {...process.env, ALGORITHM_VISUALIZER: '1'}, timeout: timeLimit, maxBuffer: 16 * 1024 * 1024},
           'Java runtime (java) not found. Install a JDK/JRE and make sure java is on the PATH, or set JAVA_BIN.',
         ))
         .then(() => new Promise((resolve, reject) => {
           const visualizationPath = path.resolve(tempPath, 'visualization.json');
           res.sendFile(visualizationPath, (err: any) => {
-            if (err) return reject(new Error('The code ran without errors but produced no visualization - nothing called the tracers. Make sure the code creates tracers, sets the layout root once (Layout.setRoot / Layout::setRoot) and calls delay() as it runs.'));
+            if (err) return reject(new Error('The code ran without errors but produced no visualization - nothing called the tracers. Make sure the code creates tracers, sets the layout root once (Layout.setRoot) and calls delay() as it runs.'));
             resolve();
           });
         }))
         .catch(next)
         .finally(() => fs.remove(tempPath));
-    });
-  }
-
-  private classpath(...entries: string[]) {
-    return [...entries, this.libraryClassesDir, this.gsonJar].join(path.delimiter);
-  }
-
-  // Compiles the tracers.java library once per server run (its classes are
-  // cached under codesDir); a failed build is forgotten so the next
-  // request retries and reports the error again.
-  private ensureLibrary(): Promise<void> {
-    if (!this.libraryBuild) {
-      this.libraryBuild = (async () => {
-        await fs.remove(this.libraryClassesDir);
-        await fs.ensureDir(this.libraryClassesDir);
-        const sources = (await fs.readdir(this.librarySourceDir))
-          .filter(file => file.endsWith('.java'))
-          .map(file => path.resolve(this.librarySourceDir, file));
-        await this.execFileChecked(
-          process.env.JAVAC_BIN || 'javac',
-          ['-cp', this.gsonJar, '-d', this.libraryClassesDir, ...sources],
-          {timeout: 60000},
-          'Java compiler (javac) not found. Install a JDK and make sure javac is on the PATH, or set JAVAC_BIN.',
-        );
-      })().catch(error => {
-        this.libraryBuild = null;
-        throw error;
-      });
-    }
-    return this.libraryBuild;
-  }
-
-  private execFileChecked(file: string, args: string[], options: child_process.ExecFileOptions, notFoundMessage: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      child_process.execFile(file, args, options, (error, stdout, stderr) => {
-        if (!error) return resolve();
-        if ((error as any).killed) return reject(new Error('Time Limit Exceeded'));
-        if ((error as any).code === 'ENOENT') return reject(new Error(notFoundMessage));
-        reject((error as any).code ? new Error(stderr || error.message) : error);
-      });
     });
   }
 }

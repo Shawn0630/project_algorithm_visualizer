@@ -4,6 +4,7 @@ import { Controller } from 'controllers/Controller';
 import { appendAiCall } from 'utils/aiCallLog';
 import { checkSyntax } from 'utils/syntaxCheck';
 import { tracerReference } from 'utils/tracerDocs';
+import { dryRunVisualization } from 'utils/dryRun';
 import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
 
@@ -750,7 +751,7 @@ export class AiController extends Controller {  constructor(server: Server) {
           partialSuspected = reply.code !== code && looksElided(reply.code, code);
         }
       }
-      const changed = reply.code !== code;
+      let changed = reply.code !== code;
       // Hallucinated-library guard: if the proposal imports or
       // calls a visualization API that does not exist in this app
       // (py_viz, set_variables, mark_line, ...), demand a rewrite
@@ -780,10 +781,54 @@ export class AiController extends Controller {  constructor(server: Server) {
           };
         }
       }
+      // Dry-run validation: when the proposal uses the tracer
+      // library, actually run it (the same machinery a Build uses)
+      // before handing it over - a syntax check cannot see a
+      // missing driver, an undefined tracer variable or a library
+      // that was never imported. One automatic repair round with
+      // the real run error as the teacher; if it still fails, the
+      // error rides along so the UI can show it and offer the
+      // fix-it action.
+      let runError: string | null = null;
+      const dryRunLanguage = String(language || 'js');
+      // Trigger when either side mentions the visualization
+      // library - a pure class/function file on either side of
+      // the edit is exactly the "runs but shows nothing" failure.
+      // Case-insensitive on purpose: broken AI code often calls a
+      // lowercase `tracer` variable that was never defined, and
+      // that must still count as visualization code.
+      const vizMentioned = /tracer|algorithm_visualizer|layout/i.test(reply.code) || /tracer|algorithm_visualizer|layout/i.test(code);
+      if (changed && ['py', 'js', 'java'].includes(dryRunLanguage) && vizMentioned) {
+        let run = await dryRunVisualization(dryRunLanguage, reply.code);
+        if (!run.ok) {
+          const retryContent = await callModel([
+            ...messages,
+            {role: 'assistant', content},
+            {
+              role: 'user',
+              content: `Your code does not produce a working visualization - running it failed with:\n${run.error}\nFix it and return the COMPLETE file again: import the library (Python: from algorithm_visualizer import *; JavaScript: const { Tracer, Array1DTracer, LogTracer, Layout, VerticalLayout } = require('algorithm-visualizer'); Java: import org.algorithm_visualizer.* and a public class Main with main), define every tracer variable you use, set the layout root exactly once, and if the file only defines a class or functions, append a driver section that creates the tracers and actually calls the code.`,
+            },
+          ], usedModel || primaryModel!);
+          if (retryContent !== null) {
+            const retryReply = parseReply(retryContent);
+            content = retryContent;
+            reply = retryReply;
+            changed = reply.code !== code;
+            run = await dryRunVisualization(dryRunLanguage, reply.code);
+          }
+          runError = run.ok ? null : (run.error || 'The visualization run failed.');
+          if (runError) {
+            reply = {
+              ...reply,
+              explanation: `Warning: this code was run and does not produce a working visualization yet (see the run error). ${reply.explanation}`,
+            };
+          }
+        }
+      }
       // Check the proposal compiles before the user is asked to review
       // it; a broken proposal is labelled, not silently handed over.
       const syntax = changed ? await checkSyntax(String(language || 'js'), reply.code) : null;
-      const fullReply = {...reply, changed, partialSuspected};
+      const fullReply = {...reply, changed, partialSuspected, runError: runError || undefined};
       logCall({status: 'ok', rawResponse: content, elidedFirstAttempt, reply: fullReply, syntax});
       return res.json({...fullReply, syntax});
     } catch (error) {

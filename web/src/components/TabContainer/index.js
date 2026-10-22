@@ -104,7 +104,7 @@ class TabContainer extends React.Component {
         <div className={styles.content}>
           {children}
         </div>
-        <TestPanel/>
+        {this.props.hideTestPanel ? null : <TestPanel/>}
       </div>
     );
   }

@@ -96,11 +96,111 @@ if (!_vizTarget) {
 `;
 }
 
+function javaHarness(code, entry, args) {
+  if (/\bclass\s+Main\b/.test(code)) {
+    throw new Error('This Java file already defines a Main class - Build already runs it as-is, so there is nothing for the case harness to add.');
+  }
+  if (!/\bclass\s+Solution\b/.test(code)) {
+    throw new Error('Visualizing a case needs a class Solution in the Java file (the harness adds a Main that calls its entry method).');
+  }
+  return `import org.algorithm_visualizer.*;
+import com.google.gson.*;
+import java.lang.reflect.*;
+import java.util.*;
+
+${code}
+
+// ---- visualize this test case (auto-generated) ----
+public class Main {
+    static final Gson GSON = new Gson();
+
+    static boolean isNumericArray(JsonElement e) {
+        if (e == null || !e.isJsonArray()) return false;
+        JsonArray a = e.getAsJsonArray();
+        if (a.size() == 0) return false;
+        for (JsonElement item : a) {
+            if (!item.isJsonPrimitive() || !item.getAsJsonPrimitive().isNumber()) return false;
+        }
+        return true;
+    }
+
+    static Object[] toObjectArray(JsonArray a) {
+        Object[] out = new Object[a.size()];
+        for (int i = 0; i < a.size(); i++) out[i] = a.get(i).getAsNumber();
+        return out;
+    }
+
+    static Object convert(JsonElement e, Class<?> t) {
+        if (e == null || e.isJsonNull()) return null;
+        if (t == String.class) return e.getAsString();
+        if (t == int.class || t == Integer.class) return e.getAsInt();
+        if (t == long.class || t == Long.class) return e.getAsLong();
+        if (t == double.class || t == Double.class) return e.getAsDouble();
+        if (t == float.class || t == Float.class) return e.getAsFloat();
+        if (t == boolean.class || t == Boolean.class) return e.getAsBoolean();
+        if (t == char.class || t == Character.class) return e.getAsString().charAt(0);
+        if (t.isArray()) {
+            JsonArray arr = e.getAsJsonArray();
+            Class<?> comp = t.getComponentType();
+            Object out = Array.newInstance(comp, arr.size());
+            for (int i = 0; i < arr.size(); i++) Array.set(out, i, convert(arr.get(i), comp));
+            return out;
+        }
+        if (List.class.isAssignableFrom(t)) {
+            List<Object> out = new ArrayList<>();
+            for (JsonElement item : e.getAsJsonArray()) out.add(GSON.fromJson(item, Object.class));
+            return out;
+        }
+        if (t == Object.class) return GSON.fromJson(e, Object.class);
+        throw new RuntimeException("Unsupported argument type: " + t.getName());
+    }
+
+    public static void main(String[] argv) throws Exception {
+        JsonArray vizArgs = new JsonParser().parse(${argsLiteral(args)}).getAsJsonArray();
+        LogTracer log = new LogTracer();
+        ArrayList<Commander> views = new ArrayList<>();
+        for (JsonElement e : vizArgs) {
+            if (isNumericArray(e)) {
+                Array1DTracer t = new Array1DTracer();
+                t.set(toObjectArray(e.getAsJsonArray()));
+                views.add(t);
+            }
+        }
+        Array1DTracer resultTracer = new Array1DTracer();
+        views.add(resultTracer);
+        views.add(log);
+        Layout.setRoot(new VerticalLayout(views.toArray(new Commander[0])));
+        Method method = null;
+        for (Method m : Solution.class.getDeclaredMethods()) {
+            if (m.getName().equals("${entry}") && m.getParameterCount() == vizArgs.size() && !m.isBridge()) method = m;
+        }
+        if (method == null) {
+            log.println("No method ${entry} taking " + vizArgs.size() + " argument(s) found on class Solution");
+            Tracer.delay();
+            return;
+        }
+        method.setAccessible(true);
+        Class<?>[] types = method.getParameterTypes();
+        Object[] callArgs = new Object[vizArgs.size()];
+        for (int i = 0; i < vizArgs.size(); i++) callArgs[i] = convert(vizArgs.get(i), types[i]);
+        log.println("Input: " + vizArgs.toString());
+        Tracer.delay();
+        Object result = method.invoke(new Solution(), callArgs);
+        JsonElement resultJson = GSON.toJsonTree(result);
+        if (isNumericArray(resultJson)) resultTracer.set(toObjectArray(resultJson.getAsJsonArray()));
+        log.println("Output: " + GSON.toJson(result));
+        Tracer.delay();
+    }
+}
+`;
+}
+
 export function buildCaseVisualization(ext, code, entry, args) {
   if (!ENTRY_PATTERN.test(entry || '')) {
     throw new Error(`"${entry}" is not a valid function/method name.`);
   }
   if (ext === 'py') return pythonHarness(code, entry, args);
   if (ext === 'js') return jsHarness(code, entry, args);
-  throw new Error(`Visualizing a case is not supported for .${ext} files yet (Python and JavaScript are).`);
+  if (ext === 'java') return javaHarness(code, entry, args);
+  throw new Error(`Visualizing a case is not supported for .${ext} files yet (Python, JavaScript and Java are).`);
 }

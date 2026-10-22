@@ -3,7 +3,7 @@ import faTrashAlt from '@fortawesome/fontawesome-free-solid/faTrashAlt';
 import faUser from '@fortawesome/fontawesome-free-solid/faUser';
 import faCaretUp from '@fortawesome/fontawesome-free-solid/faCaretUp';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { classes, extension, notifyAiSessionDeleted } from 'common/util';
+import { classes, extension, notifyAiSessionDeleted, LAYOUT_CHANGED_EVENT } from 'common/util';
 import { hasLocalCopy, originalContent } from 'common/savedCode';
 import { actions } from 'reducers';
 import { connect } from 'react-redux';
@@ -20,8 +20,31 @@ class CodeEditor extends React.Component {
     this.armTimeout = null;
   }
 
+  componentDidMount() {
+    // The Testcase panel opening/collapsing (and anything else
+    // that changes this editor's box from outside the workspace
+    // panes) announces itself: resize Ace a frame later, once the
+    // new layout has settled, so its scrollbar layers do not stay
+    // floating at the old offset.
+    this.handleLayoutChanged = () => {
+      window.requestAnimationFrame(() => {
+        if (this.aceEditorRef.current) this.aceEditorRef.current.resize();
+      });
+    };
+    window.addEventListener(LAYOUT_CHANGED_EVENT, this.handleLayoutChanged);
+  }
+
+  componentDidUpdate(prevProps) {
+    // The build-error panel appearing or disappearing above the
+    // footer changes the editor's height the same way.
+    if (!!prevProps.player.buildError !== !!this.props.player.buildError && this.handleLayoutChanged) {
+      this.handleLayoutChanged();
+    }
+  }
+
   componentWillUnmount() {
     if (this.armTimeout) window.clearTimeout(this.armTimeout);
+    if (this.handleLayoutChanged) window.removeEventListener(LAYOUT_CHANGED_EVENT, this.handleLayoutChanged);
   }
 
   handleResize() {
@@ -65,7 +88,6 @@ class CodeEditor extends React.Component {
     const { className } = this.props;
     const { editingFile } = this.props.current;
     const { user, ext } = this.props.env;
-    const currentLanguage = languages.find(language => language.ext === ext);
     const { lineIndicator, buildError } = this.props.player;
 
     if (!editingFile) return null;
@@ -128,12 +150,12 @@ class CodeEditor extends React.Component {
             isCode ? (
               <div className={styles.lang_select}>
                 <span className={styles.lang_label}>
-                  {currentLanguage ? currentLanguage.name : ext}
+                  {language ? language.name : fileExt}
                   <FontAwesomeIcon fixedWidth icon={faCaretUp}/>
                 </span>
                 <div className={styles.lang_menu}>
                   {
-                    languages.filter(language => language.ext !== ext).map(language => (
+                    languages.filter(each => each.ext !== fileExt).map(language => (
                       <div key={language.ext}
                            className={classes(styles.lang_item, this.state.armedLang === language.ext && styles.armed)}
                            onClick={() => this.handleSelectLanguage(language)}>

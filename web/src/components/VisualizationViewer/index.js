@@ -49,6 +49,12 @@ class VisualizationViewer extends BaseComponent {
   }
 
   componentDidMount() {
+    if (this.props.variant === 'doc') {
+      // Doc pane (Focus layout, top-left): always shows a Markdown
+      // doc, never follows the player.
+      this.ensureDoc(this.props);
+      return;
+    }
     const { chunks, cursor } = this.props.player;
     this.update(chunks, cursor);
     // A case visualization should be seen: leave Markdown-doc mode
@@ -62,6 +68,10 @@ class VisualizationViewer extends BaseComponent {
   }
 
   componentWillReceiveProps(nextProps) {
+    if (this.props.variant === 'doc') {
+      this.ensureDoc(nextProps);
+      return;
+    }
     // While a Markdown doc is shown, the viewer is decoupled from the
     // player: builds and cursor moves in the code pad do not touch
     // it. Only follow the doc itself (deleted -> leave doc mode,
@@ -155,20 +165,53 @@ class VisualizationViewer extends BaseComponent {
     if (chunks && chunks.length) this.update(chunks, cursor, [], 0);
   }
 
+  // Doc-pane mode: keep a Markdown doc on screen at all times -
+  // the page's README by default (else its first Markdown file),
+  // following edits and page switches. The viz pane and the
+  // combined viewer never call this.
+  ensureDoc(props) {
+    const files = (props.current.files || []).filter(file => extension(file.name) === 'md');
+    const current = this.state.docFile;
+    const shown = current && files.find(file => file.name === current.name);
+    if (shown) {
+      if (shown.content !== current.content) this.showDoc(shown);
+      return;
+    }
+    const target = files.find(file => /readme/i.test(file.name)) || files[0];
+    if (target) {
+      const syncKey = `${target.name}:${target.content.length}:${target.content.slice(0, 32)}`;
+      if (this.docSyncKey !== syncKey) {
+        this.docSyncKey = syncKey;
+        this.showDoc(target);
+      }
+    } else if (current) {
+      this.setState({ docFile: null });
+      this.reset();
+    }
+  }
+
   render() {
-    const { className } = this.props;
+    const { className, variant } = this.props;
     const mdFiles = this.visibleMdFiles();
     const docFile = this.state.docFile;
+    // 'viz' variant: visualization only, no doc tabs. 'doc'
+    // variant: the page's Markdown only, no Visualization tab.
+    // Default (combined): both, as one tabbed viewer.
+    const showTabs = variant !== 'viz' && mdFiles.length > 0;
 
     return (
       <div className={classes(styles.visualization_viewer, className)}>
         {
-          mdFiles.length ? (
+          showTabs ? (
             <div className={styles.doc_tabs}>
-              <div className={classes(styles.doc_tab, !docFile && styles.selected)}
-                   onClick={() => this.showVisualization()}>
-                Visualization
-              </div>
+              {
+                variant === 'doc' ? null : (
+                  <div className={classes(styles.doc_tab, !docFile && styles.selected)}
+                       onClick={() => this.showVisualization()}>
+                    Visualization
+                  </div>
+                )
+              }
               {
                 mdFiles.map(file => (
                   <div key={file.name}
@@ -187,6 +230,9 @@ class VisualizationViewer extends BaseComponent {
         }
         <div className={styles.viewport}>
           {this.root && this.root.render()}
+          {variant === 'doc' && !mdFiles.length
+            ? <div className={styles.doc_empty}>No Markdown document on this page.</div>
+            : null}
         </div>
       </div>
     );

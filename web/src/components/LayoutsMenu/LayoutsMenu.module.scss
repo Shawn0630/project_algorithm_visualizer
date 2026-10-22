@@ -12,16 +12,25 @@
 }
 
 .popover {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
+  // Fixed, anchored to the button by inline top/right: the header
+  // clips overflow, so an in-flow absolute popover gets cut off.
+  position: fixed;
   z-index: 41;
-  width: 340px;
+  width: 360px;
   background-color: $theme-normal;
   border: 1px solid $color-border;
   border-radius: 10px;
   padding: 12px;
   box-shadow: 0 10px 32px rgba(0, 0, 0, .45);
+}
+
+.section {
+  margin: 12px 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  opacity: .65;
 }
 
 .grid {
@@ -57,11 +66,36 @@
   background-color: $color-overlay;
   border: 1px solid $color-border;
   border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+// The Focus diagram's stacked columns inside the row diagram.
+.focus_col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-basis: 0;
+  min-width: 0;
+
+  .pane {
+    flex-basis: 0;
+  }
+}
+
+.pane_label {
+  font-size: 8px;
+  line-height: 1;
+  opacity: .65;
+  pointer-events: none;
+  user-select: none;
 }
 
 .pane_hidden {
-  flex: 0 0 4px;
-  min-width: 4px;
+  flex: 0 0 10px;
+  min-width: 10px;
   opacity: .25;
 }
 

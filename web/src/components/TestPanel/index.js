@@ -1,7 +1,7 @@
 import React from 'react';
 import { connect } from 'react-redux';
 import { TestApi, AiApi, PadTestsApi } from 'apis';
-import { extension, aiPadKey, TESTCASES_APPLY_EVENT, VISUALIZE_CASE_EVENT } from 'common/util';
+import { extension, aiPadKey, TESTCASES_APPLY_EVENT, VISUALIZE_CASE_EVENT, notifyLayoutChanged } from 'common/util';
 import { buildCaseVisualization } from 'common/visualizeCase';
 import styles from './TestPanel.module.scss';
 
@@ -213,7 +213,10 @@ class TestPanel extends React.Component {
         entry: defaults.entry,
         cases: defaults.cases.length ? defaults.cases : [blankCase(1)],
         active: 0,
-        open: true,
+        // Focus layout renders the panel with startCollapsed: it
+        // begins as just its header until the user opens it (a
+        // stored open state always wins over that default).
+        open: stored ? stored.open !== false : !this.props.startCollapsed,
         results: null,
         runError: '',
         durationMs: null,
@@ -244,6 +247,11 @@ class TestPanel extends React.Component {
     this.setState(prev => ({
       pads: { ...prev.pads, [key]: { ...current, ...patch } },
     }), callback);
+    // Opening or collapsing the panel resizes the code editor
+    // above it: tell the editor to re-layout (Ace otherwise leaves
+    // its scrollbar layers at the old offset - the floating gray
+    // bar in the layout).
+    if (Object.prototype.hasOwnProperty.call(patch, 'open')) notifyLayoutChanged();
   }
 
   // The header tabs are the expand/collapse control (the old

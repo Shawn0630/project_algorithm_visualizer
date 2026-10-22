@@ -12,6 +12,7 @@ import {
   Navigator,
   ResizableContainer,
   TabContainer,
+  TestPanel,
   ToastContainer,
   VisualizationViewer,
 } from 'components';
@@ -28,13 +29,18 @@ class App extends BaseComponent {
   constructor(props) {
     super(props);
 
-    // The workspace arrangement (pane visibility + widths) is a
-    // layout: restored from the last session when one was saved,
-    // with the built-in Default as the starting point.
+    // The workspace arrangement is a layout (common/layouts):
+    // restored from the last session when one was saved, with the
+    // built-in Default strip as the starting point. Strip mode is
+    // the native four-pane row; focus mode is the 2x2 grid.
     const layoutStore = loadLayoutStore();
+    const current = layoutStore.current;
     this.state = {
-      workspaceVisibles: layoutStore.current ? [...layoutStore.current.visibles] : [true, true, true, false],
-      workspaceWeights: layoutStore.current ? [...layoutStore.current.weights] : [1, 2, 2, 1.4],
+      layoutMode: current ? current.mode : 'strip',
+      workspaceVisibles: current && current.visibles ? [...current.visibles] : [true, true, true, false],
+      workspaceWeights: current && current.weights ? [...current.weights] : [1, 2, 2, 1.4],
+      focusCols: current && current.focus ? [...current.focus.cols] : [1, 1.15],
+      focusRows: current && current.focus ? [...current.focus.rows] : [1, 1],
       customLayouts: layoutStore.custom,
     };
 
@@ -233,39 +239,62 @@ class App extends BaseComponent {
     });
   }
 
-  // Layouts: presets and user-saved arrangements of the four
-  // workspace panes. Every change persists the current arrangement
-  // so a reload comes back exactly as the user left it.
+  // Layouts: named arrangements of the workspace (common/layouts).
+  // Every change persists the current arrangement so a reload comes
+  // back exactly as the user left it.
+  currentLayoutSnapshot() {
+    const { layoutMode, workspaceVisibles, workspaceWeights, focusCols, focusRows } = this.state;
+    return layoutMode === 'focus'
+      ? { name: 'Current', mode: 'focus', focus: { cols: [...focusCols], rows: [...focusRows] } }
+      : { name: 'Current', mode: 'strip', visibles: [...workspaceVisibles], weights: [...workspaceWeights] };
+  }
+
   persistLayout() {
-    const { workspaceVisibles, workspaceWeights, customLayouts } = this.state;
     saveLayoutStore({
-      custom: customLayouts,
-      current: { name: 'Current', visibles: workspaceVisibles, weights: workspaceWeights },
+      custom: this.state.customLayouts,
+      current: this.currentLayoutSnapshot(),
     });
   }
 
   applyLayout(layout) {
-    this.setState({
-      workspaceVisibles: [...layout.visibles],
-      workspaceWeights: [...layout.weights],
-    }, () => {
+    const after = () => {
       if (this.codeEditorRef.current) this.codeEditorRef.current.handleResize();
       this.persistLayout();
-    });
+    };
+    if (layout.mode === 'focus') {
+      this.setState({
+        layoutMode: 'focus',
+        focusCols: [...layout.focus.cols],
+        focusRows: [...layout.focus.rows],
+      }, after);
+    } else {
+      this.setState({
+        layoutMode: 'strip',
+        workspaceVisibles: [...layout.visibles],
+        workspaceWeights: [...layout.weights],
+      }, after);
+    }
   }
 
   saveCustomLayout(name) {
-    const { workspaceVisibles, workspaceWeights, customLayouts } = this.state;
-    const entry = { name, visibles: [...workspaceVisibles], weights: [...workspaceWeights] };
-    this.setState({
-      customLayouts: [...customLayouts.filter(layout => layout.name !== name), entry],
-    }, () => this.persistLayout());
+    const entry = { ...this.currentLayoutSnapshot(), name };
+    this.setState(prev => ({
+      customLayouts: [...prev.customLayouts.filter(layout => layout.name !== name), entry],
+    }), () => this.persistLayout());
   }
 
   deleteCustomLayout(name) {
     this.setState(prev => ({
       customLayouts: prev.customLayouts.filter(layout => layout.name !== name),
     }), () => this.persistLayout());
+  }
+
+  handleChangeFocusCols(focusCols) {
+    this.setState({ focusCols }, () => this.persistLayout());
+  }
+
+  handleChangeFocusRows(focusRows) {
+    this.setState({ focusRows }, () => this.persistLayout());
   }
 
   toggleNavigatorOpened(navigatorOpened = !this.state.workspaceVisibles[0]) {
@@ -285,7 +314,9 @@ class App extends BaseComponent {
   }
 
   render() {
-    const { workspaceVisibles, workspaceWeights, customLayouts } = this.state;
+    const {
+      layoutMode, workspaceVisibles, workspaceWeights, focusCols, focusRows, customLayouts,
+    } = this.state;
     const { titles, description, saved } = this.props.current;
 
     const title = `${saved ? '' : '(Unsaved) '}${titles.join(' - ')}`;
@@ -301,21 +332,41 @@ class App extends BaseComponent {
         <Header className={styles.header} onClickTitleBar={this.handleClickTitleBar}
                 navigatorOpened={navigatorOpened} loadScratchPapers={this.loadScratchPapers}
                 aiPanelOpened={aiPanelOpened} onToggleAiPanel={() => this.toggleAiPanelOpened()}
-                currentLayout={{ visibles: workspaceVisibles, weights: workspaceWeights }}
+                currentLayout={this.currentLayoutSnapshot()}
                 customLayouts={customLayouts}
                 onApplyLayout={layout => this.applyLayout(layout)}
                 onSaveLayout={name => this.saveCustomLayout(name)}
                 onDeleteLayout={name => this.deleteCustomLayout(name)}
                 ignoreHistoryBlock={this.ignoreHistoryBlock}/>
-        <ResizableContainer className={styles.workspace} horizontal weights={workspaceWeights}
-                            visibles={workspaceVisibles} onChangeWeights={this.handleChangeWorkspaceWeights}>
-          <Navigator/>
-          <VisualizationViewer className={styles.visualization_viewer}/>
-          <TabContainer className={styles.editor_tab_container}>
-            <CodeEditor ref={this.codeEditorRef}/>
-          </TabContainer>
-          <AiAssistant/>
-        </ResizableContainer>
+        {layoutMode === 'focus' ? (
+          // Focus: 2x2 grid - problem Markdown (top-left) over the
+          // Visualization, code pad (top-right) over the Testcase
+          // panel (which starts collapsed in this layout).
+          <ResizableContainer className={styles.workspace} horizontal weights={focusCols}
+                              visibles={[true, true]} onChangeWeights={this.handleChangeFocusCols}>
+            <ResizableContainer className={styles.fill} weights={focusRows}
+                                visibles={[true, true]} onChangeWeights={this.handleChangeFocusRows}>
+              <VisualizationViewer variant="doc" className={styles.visualization_viewer}/>
+              <VisualizationViewer variant="viz" className={styles.visualization_viewer}/>
+            </ResizableContainer>
+            <div className={styles.focus_right}>
+              <TabContainer hideTestPanel className={styles.editor_tab_container}>
+                <CodeEditor ref={this.codeEditorRef}/>
+              </TabContainer>
+              <TestPanel startCollapsed/>
+            </div>
+          </ResizableContainer>
+        ) : (
+          <ResizableContainer className={styles.workspace} horizontal weights={workspaceWeights}
+                              visibles={workspaceVisibles} onChangeWeights={this.handleChangeWorkspaceWeights}>
+            <Navigator/>
+            <VisualizationViewer className={styles.visualization_viewer}/>
+            <TabContainer className={styles.editor_tab_container}>
+              <CodeEditor ref={this.codeEditorRef}/>
+            </TabContainer>
+            <AiAssistant/>
+          </ResizableContainer>
+        )}
         <ToastContainer className={styles.toast_container}/>
       </div>
     );

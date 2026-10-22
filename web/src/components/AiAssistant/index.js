@@ -230,7 +230,7 @@ class AiAssistant extends React.Component {
           } : undefined;
         })(),
       },
-    }).then(({ code, explanation, changed, syntax, partialSuspected, testCases, entry }) => {
+    }).then(({ code, explanation, changed, syntax, partialSuspected, testCases, entry, runError }) => {
       this.setState({ busy: false });
       // The third kind of AI result: a set of test cases riding
       // along with the reply. It is offered as its own apply action
@@ -244,6 +244,7 @@ class AiAssistant extends React.Component {
         this.updateSession({
           pending: {
             code, explanation: explanation || '', syntax: syntax || null, partialSuspected: !!partialSuspected, hunks,
+            runError: runError || null,
             testCases: cases, testEntry: entry || '', casesApplied: false,
           },
         }, key);
@@ -385,6 +386,12 @@ class AiAssistant extends React.Component {
     this.send(`The code in your previous reply failed the syntax check with this error:\n${session.pending.syntax.error}\nFix it and return the complete file again, keeping everything else unchanged.`);
   }
 
+  sendFixRun() {
+    const session = this.session();
+    if (!session.pending || !session.pending.runError) return;
+    this.send(`The code in your previous reply was run and did not produce a working visualization:\n${session.pending.runError}\nFix it and return the complete file again: import the tracer library, define every tracer variable you use, set the layout root exactly once, and if the file only defines a class or functions, append a driver section that creates the tracers and actually calls the code.`);
+  }
+
   clearSession() {
     this.updateSession(emptySession());
   }
@@ -416,6 +423,15 @@ class AiAssistant extends React.Component {
                 <button className={styles.chip} onClick={() => this.sendFixSyntax()}>Fix this with AI</button>
               </div>
             )
+          ) : null
+        }
+        {
+          pending.runError ? (
+            <div className={styles.syntax_bad}>
+              <div>⚠ Visualization run failed - this code was actually run and produced no working visualization. Review before applying, or let the AI fix it:</div>
+              <pre className={styles.code}>{pending.runError}</pre>
+              <button className={styles.chip} onClick={() => this.sendFixRun()}>Fix this with AI</button>
+            </div>
           ) : null
         }
         {
