@@ -99,6 +99,13 @@
       <div class="tree" style="width:290px">
         <div class="cat">Starter files (from LeetCode)</div>
         <div id="impFiles" class="note">(fetch a problem first)</div>
+        <div class="cat" style="margin-top:12px">Difficulty (exactly one)</div>
+        <div id="impDifficulty">
+          <label class="tagopt"><input type="radio" name="impDiff" value="" checked/> None</label>
+          <label class="tagopt"><input type="radio" name="impDiff" value="Easy"/> Easy</label>
+          <label class="tagopt"><input type="radio" name="impDiff" value="Medium"/> Medium</label>
+          <label class="tagopt"><input type="radio" name="impDiff" value="Hard"/> Hard</label>
+        </div>
         <div class="cat" style="margin-top:12px">Categories (tags)</div>
         <div id="impTags"><span class="note">(loading)</span></div>
         <input id="impNewTags" type="text" style="width:100%; margin-top:6px" placeholder="New tags, comma separated"/>
@@ -288,9 +295,9 @@ $('btnFetch').onclick = async () => {
     });
     $('impFiles').innerHTML = lines.join('<br/>') || '(no starter snippets)';
     $('importMeta').textContent = `${data.title} · ${data.difficulty} · LeetCode topics: ${(data.topics || []).join(', ') || '(none)'}`;
-    const tagCandidates = [...(data.topics || []), data.difficulty].filter(Boolean);
-    await loadImpTags(tagCandidates);
-    const extraTopics = tagCandidates.filter(t => ![...document.querySelectorAll('#impTags input')].some(i => i.value === t));
+    document.querySelectorAll('input[name="impDiff"]').forEach(r => { r.checked = r.value === (data.difficulty || ''); });
+    await loadImpTags(data.topics || []);
+    const extraTopics = (data.topics || []).filter(t => ![...document.querySelectorAll('#impTags input')].some(i => i.value === t));
     $('impNewTags').value = extraTopics.join(', ');
     $('importStatus').textContent = data.statementMissing
       ? 'Fetched ✓ (title, difficulty, topics, starter code, example cases) - but LeetCode returned NO statement for this problem (premium), so paste the statement into the README box below, then Format with AI or Save.'
@@ -330,6 +337,8 @@ $('btnSaveProblem').onclick = async () => {
   if (!readme.trim()) { $('saveImportStatus').textContent = 'The README is empty.'; return; }
   const tags = [...document.querySelectorAll('#impTags input:checked')].map(i => i.value)
     .concat($('impNewTags').value.split(',').map(s => s.trim()).filter(Boolean));
+  const diffRadio = document.querySelector('input[name="impDiff"]:checked');
+  if (diffRadio && diffRadio.value && !tags.includes(diffRadio.value)) tags.push(diffRadio.value);
   if (!tags.length) { $('saveImportStatus').textContent = 'Pick or add at least one category.'; return; }
   let tests = null;
   const testsText = $('impTests').value.trim();
