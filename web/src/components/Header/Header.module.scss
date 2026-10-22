@@ -30,6 +30,8 @@
         font-size: $font-size-large;
         font-weight: bold;
         min-width: 0;
+        display: flex;
+        align-items: center;
 
         .nav_arrow {
           margin: 0 4px;
@@ -39,11 +41,98 @@
           margin-left: 4px;
         }
 
+        .nav_toggle {
+          margin-left: 2px;
+        }
+
+        // Breadcrumb segments and their dropdowns.
+        .crumb_wrap {
+          position: relative;
+          display: flex;
+          min-width: 0;
+        }
+
+        .crumb {
+          display: flex;
+          align-items: center;
+          min-width: 0;
+          background: none;
+          border: none;
+          padding: 4px 2px;
+          margin: 0;
+          font: inherit;
+          color: inherit;
+          cursor: pointer;
+          border-radius: 6px;
+
+          &:hover {
+            background-color: $theme-light;
+          }
+
+          .crumb_caret {
+            margin-left: 2px;
+            font-size: $font-size-normal;
+            opacity: .7;
+          }
+        }
+
+        .crumb_menu {
+          position: absolute;
+          top: calc(100% + 6px);
+          left: 0;
+          z-index: 101;
+          min-width: 230px;
+          max-width: 340px;
+          max-height: 330px;
+          overflow-y: auto;
+          display: flex;
+          flex-direction: column;
+          align-items: stretch;
+          padding: 4px;
+          background-color: $theme-light;
+          border: 1px solid $color-border;
+          border-radius: $border-radius;
+          box-shadow: 0 8px 24px $color-shadow;
+          font-size: $font-size-normal;
+          font-weight: normal;
+        }
+
+        .crumb_item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 6px 8px;
+          border-radius: 6px;
+          cursor: pointer;
+          white-space: nowrap;
+
+          &:hover {
+            background-color: $theme-normal;
+          }
+
+          &.crumb_item_selected {
+            background-color: $theme-normal;
+            font-weight: bold;
+          }
+
+          .crumb_hint {
+            opacity: .55;
+            font-size: $font-size-normal;
+          }
+        }
+
         .input_title {
           padding: 4px 8px;
           background-color: $theme-light;
           border-radius: 6px;
         }
+      }
+
+      .crumb_overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
       }
 
       .btn_dropdown {

@@ -24,6 +24,104 @@ import { BaseComponent, Button, Ellipsis, LayoutsMenu, ListItem, Player } from '
 import styles from './Header.module.scss';
 
 class Header extends BaseComponent {
+  constructor(props) {
+    super(props);
+    // Which breadcrumb dropdown is open: 'source' | 'section' |
+    // 'problem' | null.
+    this.state = { openCrumb: null };
+  }
+
+  componentWillReceiveProps(nextProps) {
+    // Navigating (from a crumb menu, the Navigator, anywhere)
+    // closes any open crumb dropdown.
+    if (nextProps.location !== this.props.location) {
+      this.setState({ openCrumb: null });
+    }
+  }
+
+  toggleCrumb(name) {
+    this.setState(prev => ({ openCrumb: prev.openCrumb === name ? null : name }));
+  }
+
+  closeCrumbs() {
+    this.setState({ openCrumb: null });
+  }
+
+  goToProblem(categoryKey, algorithmKey) {
+    this.closeCrumbs();
+    this.props.history.push(`/${categoryKey}/${algorithmKey}`);
+  }
+
+  // The breadcrumb data for the current problem page: the source
+  // (the category type, e.g. Algorithm / LeetCode), the sections
+  // of that source, and the problems of the current section.
+  crumbData() {
+    const { categories } = this.props.directory || {};
+    const { algorithm } = this.props.current;
+    if (!algorithm || !categories || !categories.length) return null;
+    // Prefer the category that actually contains the current
+    // problem (section keys are only unique per source in
+    // practice, and the Navigator's two tabs can hold same-named
+    // sections).
+    const currentCategory = categories.find(c => c.key === algorithm.categoryKey
+      && (c.algorithms || []).some(a => a.key === algorithm.algorithmKey))
+      || categories.find(c => c.key === algorithm.categoryKey);
+    if (!currentCategory) return null;
+    const types = [];
+    categories.forEach(c => { if (!types.includes(c.type)) types.push(c.type); });
+    return {
+      types,
+      type: currentCategory.type,
+      currentCategory,
+      sections: categories.filter(c => c.type === currentCategory.type),
+      problems: currentCategory.algorithms || [],
+      currentProblem: (currentCategory.algorithms || []).find(a => a.key === algorithm.algorithmKey),
+    };
+  }
+
+  selectSource(type, data) {
+    if (type === data.type) return this.closeCrumbs();
+    const { categories } = this.props.directory;
+    const first = categories.find(c => c.type === type && c.algorithms && c.algorithms.length)
+      || categories.find(c => c.type === type);
+    if (first && first.algorithms && first.algorithms.length) {
+      this.goToProblem(first.key, first.algorithms[0].key);
+    } else {
+      this.closeCrumbs();
+    }
+  }
+
+  selectSection(category) {
+    if (category.algorithms && category.algorithms.length) {
+      this.goToProblem(category.key, category.algorithms[0].key);
+    } else {
+      this.closeCrumbs();
+    }
+  }
+
+  renderCrumb(name, label, items) {
+    const open = this.state.openCrumb === name;
+    return (
+      <span className={styles.crumb_wrap} key={name}>
+        <button type="button" className={styles.crumb} onClick={() => this.toggleCrumb(name)}>
+          <Ellipsis>{label}</Ellipsis>
+          <FontAwesomeIcon className={styles.crumb_caret} fixedWidth icon={faCaretDown}/>
+        </button>
+        {open && (
+          <div className={styles.crumb_menu}>
+            {items.map(item => (
+              <div key={item.key} className={classes(styles.crumb_item, item.selected && styles.crumb_item_selected)}
+                   onClick={item.onSelect}>
+                <Ellipsis>{item.label}</Ellipsis>
+                {item.hint && <span className={styles.crumb_hint}>{item.hint}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </span>
+    );
+  }
+
   handleClickFullScreen() {
     if (screenfull.enabled) {
       if (screenfull.isFullscreen) {
@@ -113,6 +211,7 @@ class Header extends BaseComponent {
     const { className, onClickTitleBar, navigatorOpened } = this.props;
     const { scratchPaper, titles, saved } = this.props.current;
     const { user } = this.props.env;
+    const crumb = this.crumbData();
 
     const permitted = this.hasPermission();
 
@@ -120,20 +219,56 @@ class Header extends BaseComponent {
       <header className={classes(styles.header, className)}>
         <div className={styles.row}>
           <div className={styles.section}>
-            <Button className={styles.title_bar} onClick={onClickTitleBar}>
-              {
-                titles.map((title, i) => [
-                  scratchPaper && i === 1 ?
-                    <AutosizeInput className={styles.input_title} key={`title-${i}`} value={title}
-                                   onClick={e => e.stopPropagation()} onChange={e => this.handleChangeTitle(e)}/> :
-                    <Ellipsis key={`title-${i}`}>{title}</Ellipsis>,
-                  i < titles.length - 1 &&
-                  <FontAwesomeIcon className={styles.nav_arrow} fixedWidth icon={faAngleRight} key={`arrow-${i}`}/>,
-                ])
-              }
-              <FontAwesomeIcon className={styles.nav_caret} fixedWidth
-                               icon={navigatorOpened ? faCaretDown : faCaretRight}/>
-            </Button>
+            {crumb ? (
+              // Breadcrumb navigation: source (Algorithm /
+              // LeetCode) > section > problem, each segment a
+              // dropdown for switching at that level. Switching
+              // the source or a section lands on its first
+              // section's / that section's first problem. The
+              // caret at the end still toggles the full Navigator.
+              <div className={styles.title_bar}>
+                {this.renderCrumb('source', crumb.type, crumb.types.map(t => ({
+                  key: t,
+                  label: t,
+                  selected: t === crumb.type,
+                  onSelect: () => this.selectSource(t, crumb),
+                })))}
+                <FontAwesomeIcon className={styles.nav_arrow} fixedWidth icon={faAngleRight}/>
+                {this.renderCrumb('section', crumb.currentCategory.name, crumb.sections.map(c => ({
+                  key: c.key,
+                  label: c.name,
+                  hint: `${(c.algorithms || []).length}`,
+                  selected: c.key === crumb.currentCategory.key,
+                  onSelect: () => this.selectSection(c),
+                })))}
+                <FontAwesomeIcon className={styles.nav_arrow} fixedWidth icon={faAngleRight}/>
+                {this.renderCrumb('problem', crumb.currentProblem ? crumb.currentProblem.name : (titles[1] || ''), crumb.problems.map(a => ({
+                  key: a.key,
+                  label: a.name,
+                  selected: !!crumb.currentProblem && a.key === crumb.currentProblem.key,
+                  onSelect: () => this.goToProblem(crumb.currentCategory.key, a.key),
+                })))}
+                <Button className={styles.nav_toggle} onClick={onClickTitleBar}>
+                  <FontAwesomeIcon fixedWidth icon={navigatorOpened ? faCaretDown : faCaretRight}/>
+                </Button>
+              </div>
+            ) : (
+              <Button className={styles.title_bar} onClick={onClickTitleBar}>
+                {
+                  titles.map((title, i) => [
+                    scratchPaper && i === 1 ?
+                      <AutosizeInput className={styles.input_title} key={`title-${i}`} value={title}
+                                     onClick={e => e.stopPropagation()} onChange={e => this.handleChangeTitle(e)}/> :
+                      <Ellipsis key={`title-${i}`}>{title}</Ellipsis>,
+                    i < titles.length - 1 &&
+                    <FontAwesomeIcon className={styles.nav_arrow} fixedWidth icon={faAngleRight} key={`arrow-${i}`}/>,
+                  ])
+                }
+                <FontAwesomeIcon className={styles.nav_caret} fixedWidth
+                                 icon={navigatorOpened ? faCaretDown : faCaretRight}/>
+              </Button>
+            )}
+            {this.state.openCrumb && <div className={styles.crumb_overlay} onClick={() => this.closeCrumbs()}/>}
           </div>
           <div className={styles.section}>
             {/* <Button icon={permitted ? faSave : faCodeBranch} primary disabled={permitted && saved}
@@ -178,7 +313,7 @@ class Header extends BaseComponent {
 }
 
 export default withRouter(
-  connect(({ current, env }) => ({ current, env }), actions)(
+  connect(({ current, env, directory }) => ({ current, env, directory }), actions)(
     Header,
   ),
 );
