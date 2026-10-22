@@ -34,7 +34,7 @@ export function appendAiCall(entry: AiCallEntry): void {
   }
 }
 
-export function readAiCalls(limit: number): AiCallEntry[] {
+export function readAiCalls(limit: number, offset: number = 0): { calls: AiCallEntry[], total: number } {
   try {
     const lines = fs.readFileSync(logFile, 'utf8').split('\n').filter(line => line.trim());
     const entries: AiCallEntry[] = [];
@@ -45,8 +45,11 @@ export function readAiCalls(limit: number): AiCallEntry[] {
         // skip a corrupt line rather than failing the whole read
       }
     }
-    return entries.slice(-Math.max(1, Math.min(limit, 500))).reverse();
+    const newestFirst = entries.reverse();
+    const safeLimit = Math.max(1, Math.min(limit || 20, 200));
+    const safeOffset = Math.max(0, offset || 0);
+    return { calls: newestFirst.slice(safeOffset, safeOffset + safeLimit), total: newestFirst.length };
   } catch (error) {
-    return [];
+    return { calls: [], total: 0 };
   }
 }

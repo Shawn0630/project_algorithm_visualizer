@@ -451,8 +451,10 @@ export class AdminController extends Controller {
   };
 
   getAiCalls = (req: express.Request, res: express.Response) => {
-    const limit = parseInt(String(req.query.limit || '50'), 10) || 50;
-    res.json({calls: readAiCalls(limit)});
+    const limit = parseInt(String(req.query.limit || '20'), 10) || 20;
+    const offset = parseInt(String(req.query.offset || '0'), 10) || 0;
+    const { calls, total } = readAiCalls(limit, offset);
+    res.json({ calls, total, limit, offset });
   };
 
   // Which models the configured API key can use - see utils/llmModels.

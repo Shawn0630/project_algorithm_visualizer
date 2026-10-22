@@ -33,6 +33,10 @@
   table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--border); }
   th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
   tr.call { cursor:pointer; } tr.call:hover { background:var(--panel2); }
+  tr.call.selected { background:var(--panel2); }
+  tr.detail-row td { background:var(--panel2); }
+  tr.detail-row pre { max-height:30vh; }
+  select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; font:inherit; }
   .ok { color:var(--green); } .bad { color:var(--red); }
   pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; max-height:40vh; white-space:pre-wrap; word-break:break-word; font-size:12px; }
   .detail h3 { margin:14px 0 6px; font-size:13px; }
@@ -126,7 +130,19 @@
       <thead><tr><th>Time</th><th>Status</th><th>Model</th><th>Language</th><th>Instruction</th><th>Syntax</th><th>Duration</th></tr></thead>
       <tbody id="callRows"></tbody>
     </table>
-    <div class="detail" id="callDetail"></div>
+    <div class="toolbar" style="margin-top:10px">
+      <button id="btnCallsPrev">← Newer</button>
+      <span class="note" id="callsPageInfo"></span>
+      <button id="btnCallsNext">Older →</button>
+      <label class="note">per page
+        <select id="callsPageSize">
+          <option value="10">10</option>
+          <option value="20" selected>20</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <span class="note">Click a row to expand its input / raw output right under it; click again to close.</span>
+    </div>
   </section>
 </main>
 <script>
@@ -228,8 +244,14 @@ $('btnDeleteAlgo').onclick = async () => {
 };
 
 // ---------- AI call log ----------
+// Paged (newest first) with the detail expanded INLINE under
+// the clicked row - previously the detail rendered in one div
+// below the whole table, so reading a call meant scrolling to
+// the bottom of the page.
+let callsState = { offset: 0, limit: 20, total: 0 };
 async function loadCalls() {
-  const {calls} = await api('GET', '/api/admin/ai-calls?limit=50');
+  const {calls, total} = await api('GET', `/api/admin/ai-calls?limit=${callsState.limit}&offset=${callsState.offset}`);
+  callsState.total = total;
   $('callRows').innerHTML = calls.map((c, i) => `<tr class="call" data-i="${i}">
     <td>${esc(new Date(c.ts).toLocaleString())}</td>
     <td class="${c.status === 'ok' ? 'ok' : 'bad'}">${esc(c.status)}</td>
@@ -238,14 +260,33 @@ async function loadCalls() {
     <td>${c.syntax ? (c.syntax.ok ? '<span class="ok">passed</span>' : '<span class="bad">failed</span>') : '-'}</td>
     <td>${c.durationMs} ms</td></tr>`).join('') || '<tr><td colspan="7">No calls yet</td></tr>';
   $('callRows').querySelectorAll('tr.call').forEach(row => row.addEventListener('click', () => {
-    const c = calls[Number(row.dataset.i)];
-    $('callDetail').innerHTML =
-      `<h3>Input sent to the model</h3><pre>${esc(JSON.stringify({model: c.model, language: c.language, context: c.context, history: c.history, instruction: c.instruction, code: c.code}, null, 2))}</pre>` +
-      `<h3>Raw model response</h3><pre>${esc(c.rawResponse || '(none)')}</pre>` +
-      `<h3>Parsed reply / syntax check / error</h3><pre>${esc(JSON.stringify({reply: c.reply, syntax: c.syntax, error: c.error}, null, 2))}</pre>`;
+    toggleCallDetail(row, calls[Number(row.dataset.i)]);
   }));
+  const pages = Math.max(1, Math.ceil(total / callsState.limit));
+  const page = Math.floor(callsState.offset / callsState.limit) + 1;
+  $('callsPageInfo').textContent = total ? `Page ${page} of ${pages} · ${total} calls` : '';
+  $('btnCallsPrev').disabled = callsState.offset <= 0;
+  $('btnCallsNext').disabled = callsState.offset + callsState.limit >= total;
 }
-$('btnReloadCalls').onclick = loadCalls;
+function toggleCallDetail(row, c) {
+  const existing = $('callRows').querySelector('tr.detail-row');
+  const wasThis = !!existing && existing.previousElementSibling === row;
+  if (existing) existing.remove();
+  $('callRows').querySelectorAll('tr.call.selected').forEach(r => r.classList.remove('selected'));
+  if (wasThis) return;
+  row.classList.add('selected');
+  const tr = document.createElement('tr');
+  tr.className = 'detail-row';
+  tr.innerHTML = `<td colspan="7" class="detail">` +
+    `<h3>Input sent to the model</h3><pre>${esc(JSON.stringify({model: c.model, language: c.language, context: c.context, history: c.history, instruction: c.instruction, code: c.code}, null, 2))}</pre>` +
+    `<h3>Raw model response</h3><pre>${esc(c.rawResponse || '(none)')}</pre>` +
+    `<h3>Parsed reply / syntax check / error</h3><pre>${esc(JSON.stringify({reply: c.reply, syntax: c.syntax, error: c.error}, null, 2))}</pre></td>`;
+  row.after(tr);
+}
+$('btnReloadCalls').onclick = () => { callsState.offset = 0; loadCalls(); };
+$('btnCallsPrev').onclick = () => { callsState.offset = Math.max(0, callsState.offset - callsState.limit); loadCalls(); };
+$('btnCallsNext').onclick = () => { callsState.offset += callsState.limit; loadCalls(); };
+$('callsPageSize').onchange = e => { callsState.limit = Number(e.target.value); callsState.offset = 0; loadCalls(); };
 $('btnModels').onclick = async () => {
   $('modelList').innerHTML = '<p class="note">Asking the provider...</p>';
   try {
