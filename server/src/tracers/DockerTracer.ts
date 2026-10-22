@@ -33,12 +33,11 @@ export class DockerTracer extends Tracer {
       .catch(() => false);
   }
 
-  // The base class builds the image at boot via update(). When the
-  // Docker daemon is not running (Docker Desktop closed), that used
-  // to dump a full stack trace into the boot log - caught, so the
-  // server kept running, but alarming and useless. Probe quietly
-  // instead: one line at boot, and the image builds lazily on first
-  // use if Docker shows up later.
+  // Historical boot-time path - CppTracer overrides update()
+  // to a no-op, so this no longer runs at boot (or on webhook
+  // updates): the image builds lazily in ensureImage() on the
+  // first C++ request instead. Kept for the record of why boots
+  // used to be noisy.
   async update(release?: Release) {
     if (!await this.dockerAvailable()) {
       console.log('C++ tracer: Docker is not available - skipping the image build (start Docker Desktop to enable C++).');
