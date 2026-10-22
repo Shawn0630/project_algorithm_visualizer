@@ -12,6 +12,21 @@
 // plain-language error the panel shows as-is.
 const ENTRY_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+// An entry may be a bare method name ("search") or the
+// ClassName.method form ("Solution.search"); both are accepted
+// everywhere the test runner accepts them. Returns null for
+// anything else.
+function parseEntry(entry) {
+  const parts = String(entry || '').trim().split('.');
+  if (parts.length === 1 && ENTRY_PATTERN.test(parts[0])) {
+    return { className: null, method: parts[0] };
+  }
+  if (parts.length === 2 && ENTRY_PATTERN.test(parts[0]) && ENTRY_PATTERN.test(parts[1])) {
+    return { className: parts[0], method: parts[1] };
+  }
+  return null;
+}
+
 function argsLiteral(args) {
   // A JSON string literal containing the JSON text: safe to embed
   // in Python, JavaScript and Java source alike.
@@ -96,12 +111,12 @@ if (!_vizTarget) {
 `;
 }
 
-function javaHarness(code, entry, args) {
+function javaHarness(code, entry, args, className) {
   if (/\bclass\s+Main\b/.test(code)) {
     throw new Error('This Java file already defines a Main class - Build already runs it as-is, so there is nothing for the case harness to add.');
   }
-  if (!/\bclass\s+Solution\b/.test(code)) {
-    throw new Error('Visualizing a case needs a class Solution in the Java file (the harness adds a Main that calls its entry method).');
+  if (!new RegExp(`\\bclass\\s+${className}\\b`).test(code)) {
+    throw new Error(`Visualizing a case needs a class ${className} in the Java file (the harness adds a Main that calls its entry method).`);
   }
   return `import org.algorithm_visualizer.*;
 import com.google.gson.*;
@@ -171,11 +186,11 @@ public class Main {
         views.add(log);
         Layout.setRoot(new VerticalLayout(views.toArray(new Commander[0])));
         Method method = null;
-        for (Method m : Solution.class.getDeclaredMethods()) {
+        for (Method m : ${className}.class.getDeclaredMethods()) {
             if (m.getName().equals("${entry}") && m.getParameterCount() == vizArgs.size() && !m.isBridge()) method = m;
         }
         if (method == null) {
-            log.println("No method ${entry} taking " + vizArgs.size() + " argument(s) found on class Solution");
+            log.println("No method ${entry} taking " + vizArgs.size() + " argument(s) found on class ${className}");
             Tracer.delay();
             return;
         }
@@ -185,7 +200,7 @@ public class Main {
         for (int i = 0; i < vizArgs.size(); i++) callArgs[i] = convert(vizArgs.get(i), types[i]);
         log.println("Input: " + vizArgs.toString());
         Tracer.delay();
-        Object result = method.invoke(new Solution(), callArgs);
+        Object result = method.invoke(new ${className}(), callArgs);
         JsonElement resultJson = GSON.toJsonTree(result);
         if (isNumericArray(resultJson)) resultTracer.set(toObjectArray(resultJson.getAsJsonArray()));
         log.println("Output: " + GSON.toJson(result));
@@ -196,11 +211,12 @@ public class Main {
 }
 
 export function buildCaseVisualization(ext, code, entry, args) {
-  if (!ENTRY_PATTERN.test(entry || '')) {
+  const parsed = parseEntry(entry);
+  if (!parsed) {
     throw new Error(`"${entry}" is not a valid function/method name.`);
   }
-  if (ext === 'py') return pythonHarness(code, entry, args);
-  if (ext === 'js') return jsHarness(code, entry, args);
-  if (ext === 'java') return javaHarness(code, entry, args);
+  if (ext === 'py') return pythonHarness(code, parsed.method, args);
+  if (ext === 'js') return jsHarness(code, parsed.method, args);
+  if (ext === 'java') return javaHarness(code, parsed.method, args, parsed.className || 'Solution');
   throw new Error(`Visualizing a case is not supported for .${ext} files yet (Python, JavaScript and Java are).`);
 }

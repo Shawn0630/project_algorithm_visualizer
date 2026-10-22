@@ -34,6 +34,22 @@ export interface TestResult {
 
 const ENTRY_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+// An entry may be a bare method name ("search") or the
+// ClassName.method form ("Solution.search") - the latter is
+// what users type and what models return, so it is accepted and
+// split here rather than rejected. Returns null for anything
+// else.
+export function parseEntry(entry: string): { className: string | null, method: string } | null {
+  const parts = String(entry || '').trim().split('.');
+  if (parts.length === 1 && ENTRY_PATTERN.test(parts[0])) {
+    return { className: null, method: parts[0] };
+  }
+  if (parts.length === 2 && ENTRY_PATTERN.test(parts[0]) && ENTRY_PATTERN.test(parts[1])) {
+    return { className: parts[0], method: parts[1] };
+  }
+  return null;
+}
+
 function exec(cmd: string, args: string[], timeout: number, cwd?: string): Promise<{ stdout: string, stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { timeout, maxBuffer: 8 * 1024 * 1024, cwd }, (error, stdout, stderr) => {
@@ -295,18 +311,20 @@ public class Driver {
     String specText = new String(Files.readAllBytes(Paths.get(argv[0])), "UTF-8");
     JsonObject spec = gson.fromJson(specText, JsonObject.class);
     String entry = spec.get("entry").getAsString();
+    String className = spec.has("className") && !spec.get("className").isJsonNull()
+      ? spec.get("className").getAsString() : "Solution";
     JsonArray cases = spec.getAsJsonArray("cases");
 
     Class<?> solutionClass = null;
     Object instance = null;
     String loadError = null;
     try {
-      solutionClass = Class.forName("Solution");
+      solutionClass = Class.forName(className);
       Constructor<?> ctor = solutionClass.getDeclaredConstructor();
       ctor.setAccessible(true);
       instance = ctor.newInstance();
     } catch (Throwable t) {
-      loadError = "No usable class Solution found (" + t.getClass().getSimpleName()
+      loadError = "No usable class " + className + " found (" + t.getClass().getSimpleName()
         + (t.getMessage() != null ? ": " + t.getMessage() : "") + ")";
     }
 
@@ -324,7 +342,7 @@ public class Driver {
           method = findMethod(solutionClass, entry, args.size());
           if (method == null) {
             throw new RuntimeException("No method " + entry + " taking " + args.size()
-              + " argument(s) on class Solution");
+              + " argument(s) on class " + className);
           }
           method.setAccessible(true);
         }
@@ -356,10 +374,29 @@ public class Driver {
   }
 
   static Method findMethod(Class<?> cls, String name, int argc) {
+    // Among same-name, same-arity overloads prefer one whose
+    // parameters are all JSON-convertible - a visualized Solution
+    // often carries an extra overload taking tracer objects
+    // (LogTracer, Array2DTracer, ...) that a test case can never
+    // supply.
+    Method fallback = null;
     for (Method m : cls.getDeclaredMethods()) {
-      if (m.getName().equals(name) && m.getParameterCount() == argc && !m.isBridge()) return m;
+      if (!m.getName().equals(name) || m.getParameterCount() != argc || m.isBridge()) continue;
+      boolean convertible = true;
+      for (Class<?> p : m.getParameterTypes()) {
+        if (!isConvertible(p)) { convertible = false; break; }
+      }
+      if (convertible) return m;
+      if (fallback == null) fallback = m;
     }
-    return null;
+    return fallback;
+  }
+
+  static boolean isConvertible(Class<?> t) {
+    return t == String.class || t.isPrimitive()
+      || t == Integer.class || t == Long.class || t == Double.class || t == Float.class
+      || t == Boolean.class || t == Character.class || t == Byte.class || t == Short.class
+      || t.isArray() || List.class.isAssignableFrom(t) || t == Object.class;
   }
 
   static boolean jsonEquals(JsonElement a, JsonElement b) {
@@ -406,14 +443,19 @@ export async function runTests(
   entry: string,
   cases: TestCaseSpec[],
 ): Promise<{ results: TestResult[], durationMs: number }> {
-  if (!ENTRY_PATTERN.test(entry)) {
+  const parsedEntry = parseEntry(entry);
+  if (!parsedEntry) {
     throw new Error(`"${entry}" is not a valid function/method name.`);
   }
   const startedAt = Date.now();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'av-tests-'));
   try {
     const specPath = path.join(dir, 'spec.json');
-    await fs.writeFile(specPath, JSON.stringify({ entry, cases }));
+    await fs.writeFile(specPath, JSON.stringify({
+      entry: parsedEntry.method,
+      className: parsedEntry.className,
+      cases,
+    }));
     let stdout: string;
     if (language === 'py') {
       await fs.writeFile(path.join(dir, 'algorithm_visualizer.py'), PY_STUB);
@@ -437,7 +479,14 @@ export async function runTests(
         10000, dir,
       ));
     } else if (language === 'java') {
-      await fs.writeFile(path.join(dir, 'Solution.java'), code);
+      // The file is named after its public class when it declares
+      // one (a visualized pad is usually "public class Main" with
+      // a package-private Solution beside it - javac refuses a
+      // public class in a differently named file); a bare
+      // Solution-only file keeps the Solution.java name.
+      const publicClass = /public\s+class\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(code);
+      const codeFileName = publicClass ? `${publicClass[1]}.java` : 'Solution.java';
+      await fs.writeFile(path.join(dir, codeFileName), code);
       await fs.writeFile(path.join(dir, 'Driver.java'), JAVA_DRIVER);
       const gsonJar = path.resolve(__dirname, '..', 'tracers', 'java', 'lib', 'gson-2.8.5.jar');
       const classesDir = path.resolve(codesDir, '.tracers-java-classes');
@@ -447,7 +496,7 @@ export async function runTests(
       try {
         await exec(
           process.env.JAVAC_BIN || 'javac',
-          ['-cp', cp, '-d', dir, path.join(dir, 'Solution.java'), path.join(dir, 'Driver.java')],
+          ['-cp', cp, '-d', dir, path.join(dir, codeFileName), path.join(dir, 'Driver.java')],
           30000, dir,
         );
       } catch (error) {

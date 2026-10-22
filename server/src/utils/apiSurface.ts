@@ -285,6 +285,22 @@ export async function validateApiUsage(language: string, code: string): Promise<
     }
   }
 
+  // Tracer variables initialized to None / null - the classic
+  // placeholder pattern: the algorithm's methods call
+  // array_tracer.select(...), but the variable is never actually
+  // assigned a tracer anywhere in the file, so the run dies with
+  // "'NoneType' object has no attribute 'select'". (A variable
+  // that IS assigned a tracer instance somewhere - the map above
+  // found it - is not flagged; ordering/scope slips beyond that
+  // are the dry run's job.)
+  const noneInit = /(\w+)\s*=\s*(?:None|null)\b/g;
+  let nm: RegExpExecArray | null;
+  const noneVars = new Set<string>();
+  while ((nm = noneInit.exec(code))) {
+    if (!vars.has(nm[1]) && new RegExp(`${nm[1]}\\s*\\.`).test(code)) noneVars.add(nm[1]);
+  }
+  noneVars.forEach(name => violations.push(`${name} - this tracer variable is initialized to ${language === 'py' ? 'None' : 'null'} and never assigned a tracer, but methods are called on it; create the tracer before any code that uses it runs`));
+
   // Invented tracer classes.
   const construction = /(?:new\s+|=\s*)([A-Z]\w*Tracer)\s*\(/g;
   let cm: RegExpExecArray | null;

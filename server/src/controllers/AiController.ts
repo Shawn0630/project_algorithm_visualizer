@@ -35,7 +35,7 @@ function systemPrompt(ext: string) {
     '- When asked to visualize / add tracers: instrument the algorithm with the tracer API below, call delay after each meaningful step, set the root layout once, and keep the algorithm logic itself unchanged.',
     '- The ONLY visualization library is algorithm_visualizer, exactly as documented below. There is no py_viz module and there are no set_variables / mark_line methods - never invent imports or tracer methods. If the file only defines a class or functions (e.g. class Solution), append a driver section that creates the tracers and actually calls the code, or nothing will visualize.',
     '- If the instruction only asks for an explanation, return the code unchanged and put the explanation in the explanation field.',
-    '- If the instruction asks for test cases (or supplying cases is the natural fulfilment of it), ALSO include "testCases": [{"name": "<short name>", "args": [<call arguments as JSON, in order>], "expected": <return value as JSON>}] and "entry": "<the function, or the method on class Solution, the cases call>". args/expected must be plain JSON values, and expected must be the value a CORRECT implementation returns - work each case out carefully. Still return the complete code as well (unchanged, unless the instruction also asked for code changes).',
+    '- If the instruction asks for test cases (or supplying cases is the natural fulfilment of it), ALSO include "testCases": [{"name": "<short name>", "args": [<call arguments as JSON, in order>], "expected": <return value as JSON>}] and "entry": "<bare name of the function, or of the method on class Solution, the cases call - e.g. search, not Solution.search>". args/expected must be plain JSON values, and expected must be the value a CORRECT implementation returns - work each case out carefully. Still return the complete code as well (unchanged, unless the instruction also asked for code changes).',
     '- This is a continuing session for one code pad: earlier turns are included as conversation history. The file content in the latest user message is authoritative - the user may have hand-edited it, or accepted or rejected your earlier proposals.',
     '',
     tracerReference(ext),
@@ -429,7 +429,7 @@ export class AiController extends Controller {  constructor(server: Server) {
         content: [
           'You generate test cases for a coding problem inside Algorithm Visualizer.',
           'Reply with ONLY a JSON object - no prose, no markdown fences:',
-          '{"entry": "<name of the function, or of the method on class Solution, to call>", "cases": [{"name": "<short case name>", "args": [<the call arguments as JSON, in order>], "expected": <the return value as JSON>}]}',
+          '{"entry": "<bare name of the function, or of the method on class Solution, to call - e.g. search, not Solution.search>", "cases": [{"name": "<short case name>", "args": [<the call arguments as JSON, in order>], "expected": <the return value as JSON>}]}',
           'Rules:',
           '- args and expected must be plain JSON values only (numbers, strings, booleans, null, arrays, objects): the runner passes args as JSON and compares the return value against expected as JSON.',
           '- expected must be the value a CORRECT implementation returns for those args. Work every case out carefully - a wrong expected value is worse than no case.',

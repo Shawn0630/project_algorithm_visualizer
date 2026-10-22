@@ -20,22 +20,10 @@
     .editor_tab_container {
     }
 
-    // The nested containers and the Focus right column fill the
-    // wrapper the outer ResizableContainer gives them.
+    // The nested Focus containers fill the wrapper the outer
+    // ResizableContainer gives them.
     .fill {
       height: 100%;
-    }
-
-    .focus_right {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      min-height: 0;
-
-      .editor_tab_container {
-        flex: 1;
-        min-height: 0;
-      }
     }
   }
 

@@ -41,6 +41,9 @@ class App extends BaseComponent {
       workspaceWeights: current && current.weights ? [...current.weights] : [1, 2, 2, 1.4],
       focusCols: current && current.focus ? [...current.focus.cols] : [1, 1.15],
       focusRows: current && current.focus ? [...current.focus.rows] : [1, 1],
+      focusRightRows: current && current.focus && current.focus.right ? [...current.focus.right] : [2.6, 1],
+      focusNavWeight: current && current.focus && current.focus.nav ? current.focus.nav : 1,
+      focusAiWeight: current && current.focus && current.focus.ai ? current.focus.ai : 1.6,
       customLayouts: layoutStore.custom,
     };
 
@@ -50,6 +53,13 @@ class App extends BaseComponent {
     this.handleClickTitleBar = this.handleClickTitleBar.bind(this);
     this.loadScratchPapers = this.loadScratchPapers.bind(this);
     this.handleChangeWorkspaceWeights = this.handleChangeWorkspaceWeights.bind(this);
+    // The Focus handlers must be bound too: ResizableContainer
+    // calls onChangeWeights as a bare callback, and unbound these
+    // threw on this.setState - which is why the Focus splitters
+    // looked dead while the strip (bound above) always worked.
+    this.handleChangeFocusRows = this.handleChangeFocusRows.bind(this);
+    this.handleChangeFocusOuter = this.handleChangeFocusOuter.bind(this);
+    this.handleChangeFocusRight = this.handleChangeFocusRight.bind(this);
   }
 
   componentDidMount() {
@@ -243,9 +253,23 @@ class App extends BaseComponent {
   // Every change persists the current arrangement so a reload comes
   // back exactly as the user left it.
   currentLayoutSnapshot() {
-    const { layoutMode, workspaceVisibles, workspaceWeights, focusCols, focusRows } = this.state;
+    const {
+      layoutMode, workspaceVisibles, workspaceWeights,
+      focusCols, focusRows, focusRightRows, focusNavWeight, focusAiWeight,
+    } = this.state;
     return layoutMode === 'focus'
-      ? { name: 'Current', mode: 'focus', focus: { cols: [...focusCols], rows: [...focusRows] } }
+      ? {
+        name: 'Current',
+        mode: 'focus',
+        focus: {
+          cols: [...focusCols],
+          rows: [...focusRows],
+          right: [...focusRightRows],
+          nav: focusNavWeight,
+          ai: focusAiWeight,
+        },
+        visibles: [...workspaceVisibles],
+      }
       : { name: 'Current', mode: 'strip', visibles: [...workspaceVisibles], weights: [...workspaceWeights] };
   }
 
@@ -266,6 +290,10 @@ class App extends BaseComponent {
         layoutMode: 'focus',
         focusCols: [...layout.focus.cols],
         focusRows: [...layout.focus.rows],
+        focusRightRows: layout.focus.right ? [...layout.focus.right] : [2.6, 1],
+        focusNavWeight: layout.focus.nav || 1,
+        focusAiWeight: layout.focus.ai || 1.6,
+        ...(layout.visibles ? { workspaceVisibles: [...layout.visibles] } : {}),
       }, after);
     } else {
       this.setState({
@@ -289,12 +317,24 @@ class App extends BaseComponent {
     }), () => this.persistLayout());
   }
 
-  handleChangeFocusCols(focusCols) {
-    this.setState({ focusCols }, () => this.persistLayout());
-  }
-
   handleChangeFocusRows(focusRows) {
     this.setState({ focusRows }, () => this.persistLayout());
+  }
+
+  // The Focus outer container's weights are the four outer
+  // columns: [Navigator, left column, right column, AI Assistant]
+  // (hidden panes keep their weight; the container only moves
+  // weight between visible neighbours).
+  handleChangeFocusOuter(weights) {
+    this.setState({
+      focusNavWeight: weights[0],
+      focusCols: [weights[1], weights[2]],
+      focusAiWeight: weights[3],
+    }, () => this.persistLayout());
+  }
+
+  handleChangeFocusRight(focusRightRows) {
+    this.setState({ focusRightRows }, () => this.persistLayout());
   }
 
   toggleNavigatorOpened(navigatorOpened = !this.state.workspaceVisibles[0]) {
@@ -315,7 +355,9 @@ class App extends BaseComponent {
 
   render() {
     const {
-      layoutMode, workspaceVisibles, workspaceWeights, focusCols, focusRows, customLayouts,
+      layoutMode, workspaceVisibles, workspaceWeights,
+      focusCols, focusRows, focusRightRows, focusNavWeight, focusAiWeight,
+      customLayouts,
     } = this.state;
     const { titles, description, saved } = this.props.current;
 
@@ -341,20 +383,28 @@ class App extends BaseComponent {
         {layoutMode === 'focus' ? (
           // Focus: 2x2 grid - problem Markdown (top-left) over the
           // Visualization, code pad (top-right) over the Testcase
-          // panel (which starts collapsed in this layout).
-          <ResizableContainer className={styles.workspace} horizontal weights={focusCols}
-                              visibles={[true, true]} onChangeWeights={this.handleChangeFocusCols}>
+          // panel (which starts collapsed in this layout). The
+          // Navigator and the AI Assistant join as extra outer
+          // columns when toggled on, so the header toggles work in
+          // this mode too; every split here is draggable.
+          <ResizableContainer className={styles.workspace} horizontal
+                              weights={[focusNavWeight, focusCols[0], focusCols[1], focusAiWeight]}
+                              visibles={[workspaceVisibles[0], true, true, workspaceVisibles[3]]}
+                              onChangeWeights={this.handleChangeFocusOuter}>
+            <Navigator/>
             <ResizableContainer className={styles.fill} weights={focusRows}
                                 visibles={[true, true]} onChangeWeights={this.handleChangeFocusRows}>
               <VisualizationViewer variant="doc" className={styles.visualization_viewer}/>
               <VisualizationViewer variant="viz" className={styles.visualization_viewer}/>
             </ResizableContainer>
-            <div className={styles.focus_right}>
+            <ResizableContainer className={styles.fill} weights={focusRightRows}
+                                visibles={[true, true]} onChangeWeights={this.handleChangeFocusRight}>
               <TabContainer hideTestPanel className={styles.editor_tab_container}>
                 <CodeEditor ref={this.codeEditorRef}/>
               </TabContainer>
               <TestPanel startCollapsed/>
-            </div>
+            </ResizableContainer>
+            <AiAssistant/>
           </ResizableContainer>
         ) : (
           <ResizableContainer className={styles.workspace} horizontal weights={workspaceWeights}
