@@ -406,6 +406,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       ? (req.body as any).model.trim().slice(0, 200)
       : null;
     const startedAt = Date.now();
+    let sentMessages: any = null;
     const logCall = (partial: object) => appendAiCall({
       ts: new Date().toISOString(),
       status: 'ok',
@@ -415,6 +416,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       instruction: 'generate-tests',
       context: null,
       history: [],
+      messages: sentMessages,
       code,
       rawResponse: null,
       reply: null,
@@ -453,6 +455,8 @@ export class AiController extends Controller {  constructor(server: Server) {
       },
     ];
     try {
+      sentMessages = messages;
+      sentMessages = messages;
       const {content, usedModel, totalAttempts} = await callLlm(messages, requestedModel);
       const parsed = parseGeneratedCases(content);
       if (!parsed) {
@@ -504,6 +508,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       ? (req.body as any).model.trim().slice(0, 200)
       : null;
     const startedAt = Date.now();
+    let sentMessages: any = null;
     const logCall = (partial: object) => appendAiCall({
       ts: new Date().toISOString(),
       status: 'ok',
@@ -513,6 +518,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       instruction: 'test-chat',
       context: null,
       history: turns,
+      messages: sentMessages,
       code,
       rawResponse: null,
       reply: null,
@@ -623,6 +629,7 @@ export class AiController extends Controller {  constructor(server: Server) {
     const startedAt = Date.now();
     let usedModel: string | null = primaryModel || null;
     let totalAttempts = 0;
+    let lastSentMessages: any = null;
     const logCall = (partial: object) => appendAiCall({
       ts: new Date().toISOString(),
       status: 'ok',
@@ -632,6 +639,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       instruction,
       context: context || null,
       history: turns,
+      messages: lastSentMessages,
       code,
       rawResponse: null,
       reply: null,
@@ -661,6 +669,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       return !!(error && ((error as any).llmTimeout || !status || status === 429 || status >= 500));
     };
     const callModel = async (messages: object[], modelName: string) => {
+      lastSentMessages = messages;
       let fastRetries = 0;
       let timeoutRetries = 0;
       for (;;) {

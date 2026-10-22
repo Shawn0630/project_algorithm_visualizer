@@ -17,6 +17,12 @@ export interface AiCallEntry {
   context: any;
   history: any;
   code: string;
+  // The exact messages array sent to the model on the call this
+  // entry reports (system prompt, history, user turn) - recorded
+  // so the admin log can show the real prompt, not a rebuild
+  // from components. Null on entries logged before this existed
+  // or before any call was made (e.g. not_configured).
+  messages?: { role: string, content: any }[] | null;
   rawResponse: string | null;
   reply: { code: string, explanation: string, changed: boolean } | null;
   syntax: { ok: boolean, error: string } | null;

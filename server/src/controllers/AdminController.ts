@@ -379,7 +379,7 @@ export class AdminController extends Controller {
       if (!parsed || typeof parsed.readme !== 'string' || !parsed.readme.trim() || !cases) {
         appendAiCall({
           ts: new Date().toISOString(), status: 'error', model: usedModel, language: 'markdown',
-          instruction: 'admin-leetcode-generate', context: null, history: null, code: '',
+          instruction: 'admin-leetcode-generate', context: null, history: null, code: '', messages,
           rawResponse: content, reply: null, syntax: null,
           error: `The model did not return the expected JSON (after ${totalAttempts} attempt(s)).`, durationMs: Date.now() - startedAt,
         });
@@ -387,7 +387,7 @@ export class AdminController extends Controller {
       }
       appendAiCall({
         ts: new Date().toISOString(), status: 'ok', model: usedModel, language: 'markdown',
-        instruction: 'admin-leetcode-generate', context: null, history: null, code: '',
+        instruction: 'admin-leetcode-generate', context: null, history: null, code: '', messages,
         rawResponse: content, reply: {code: '', explanation: `Generated README + ${cases.length} cases for ${title}`, changed: false},
         syntax: null, error: null, durationMs: Date.now() - startedAt,
       });
@@ -401,7 +401,7 @@ export class AdminController extends Controller {
       const status = (error as any).status || 502;
       appendAiCall({
         ts: new Date().toISOString(), status: status === 503 ? 'not_configured' : 'error', model: null, language: 'markdown',
-        instruction: 'admin-leetcode-generate', context: null, history: null, code: '',
+        instruction: 'admin-leetcode-generate', context: null, history: null, code: '', messages,
         rawResponse: null, reply: null, syntax: null, error: (error as Error).message, durationMs: Date.now() - startedAt,
       });
       return res.status(status).json({message: (error as Error).message});
