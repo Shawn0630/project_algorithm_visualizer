@@ -309,24 +309,20 @@ export class AdminController extends Controller {
       });
       const question = data && data.data && data.data.question;
       if (!question) return res.status(404).json({message: `LeetCode has no problem with slug "${slug}".`});
+      // For paid-only problems LeetCode's public API returns
+      // content: null while title, difficulty, topics, snippets
+      // and example cases still arrive. That is enough to import
+      // the problem - the statement itself is pasted in by hand
+      // on the admin page (flagged via statementMissing) instead
+      // of failing here or, worse, at the AI-format step.
       const markdown = htmlToMarkdown(question.content || '');
-      if (!markdown) {
-        // LeetCode's public API serves no statement text for
-        // paid-only problems without a login (content comes back
-        // null while title and snippets still arrive) - the
-        // import used to "succeed" with an empty README and then
-        // fail confusingly at the AI-format step. Say so here.
-        return res.status(422).json({
-          message: question.isPaidOnly
-            ? `"${question.title}" is a LeetCode premium (paid-only) problem: LeetCode's public API returns no statement for it without a login, so it cannot be imported this way.`
-            : `LeetCode returned an empty statement for "${question.title}" - nothing to import.`,
-        });
-      }
       return res.json({
         frontendId: question.questionFrontendId,
         title: question.title,
         slug: question.titleSlug,
         difficulty: question.difficulty,
+        isPaidOnly: !!question.isPaidOnly,
+        statementMissing: !markdown,
         topics: (question.topicTags || []).map((tag: any) => tag.name),
         markdown,
         snippets: (question.codeSnippets || []).map((snippet: any) => ({lang: snippet.lang, langSlug: snippet.langSlug, code: snippet.code})),

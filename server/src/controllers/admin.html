@@ -288,10 +288,13 @@ $('btnFetch').onclick = async () => {
     });
     $('impFiles').innerHTML = lines.join('<br/>') || '(no starter snippets)';
     $('importMeta').textContent = `${data.title} · ${data.difficulty} · LeetCode topics: ${(data.topics || []).join(', ') || '(none)'}`;
-    await loadImpTags(data.topics || []);
-    const extraTopics = (data.topics || []).filter(t => ![...document.querySelectorAll('#impTags input')].some(i => i.value === t));
+    const tagCandidates = [...(data.topics || []), data.difficulty].filter(Boolean);
+    await loadImpTags(tagCandidates);
+    const extraTopics = tagCandidates.filter(t => ![...document.querySelectorAll('#impTags input')].some(i => i.value === t));
     $('impNewTags').value = extraTopics.join(', ');
-    $('importStatus').textContent = 'Fetched ✓ Now Format with AI (or edit and save as-is).';
+    $('importStatus').textContent = data.statementMissing
+      ? 'Fetched ✓ (title, difficulty, topics, starter code, example cases) - but LeetCode returned NO statement for this problem (premium), so paste the statement into the README box below, then Format with AI or Save.'
+      : 'Fetched ✓ Now Format with AI (or edit and save as-is).';
   } catch (e) {
     $('importStatus').textContent = 'Fetch failed: ' + e.message;
   } finally {
@@ -300,6 +303,7 @@ $('btnFetch').onclick = async () => {
 };
 $('btnAiFormat').onclick = async () => {
   if (!imp.fetched) { $('importStatus').textContent = 'Fetch a problem first.'; return; }
+  if (!$('impReadme').value.trim()) { $('importStatus').textContent = 'The statement box is empty - paste the problem statement first (premium problems arrive without one), then Format.'; return; }
   $('importStatus').textContent = 'Asking the AI to format (this can take a while)...';
   $('btnAiFormat').disabled = true;
   try {
