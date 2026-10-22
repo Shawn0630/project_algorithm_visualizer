@@ -47,6 +47,18 @@
   .hidden { display:none; }
   input[type=text] { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 10px; font:inherit; }
   .tagopt { display:block; padding:2px 4px; cursor:pointer; white-space:nowrap; }
+  /* Import tab: a vertical sequence of numbered step cards. */
+  .step { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
+  .step h2 { font-size:14px; margin:0 0 10px; display:flex; align-items:center; }
+  .step h2 .n { display:inline-block; width:20px; height:20px; line-height:20px; text-align:center; border-radius:50%; background:var(--accent); color:#fff; font-size:12px; margin-right:8px; flex-shrink:0; }
+  .step .path { font-family:ui-monospace,Menlo,monospace; opacity:.8; margin-bottom:6px; word-break:break-all; }
+  .step .status { margin-top:8px; }
+  .file-row { display:flex; justify-content:space-between; gap:10px; padding:3px 0; border-bottom:1px dashed var(--border); }
+  .file-row:last-child { border-bottom:none; }
+  .radio-row { display:flex; gap:16px; flex-wrap:wrap; }
+  .radio-row label { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+  #impTags { display:flex; flex-wrap:wrap; gap:2px 16px; }
+  #impTags .tagopt { display:inline-flex; align-items:center; gap:4px; }
 </style>
 </head>
 <body>
@@ -87,39 +99,49 @@
     </div>
   </section>
   <section id="viewImport" class="hidden">
-    <div class="toolbar">
-      <span>LeetCode problem URL or slug:</span>
-      <input id="lcInput" type="text" style="flex:1; min-width:260px" placeholder="https://leetcode.com/problems/two-sum/  or  two-sum"/>
-      <button id="btnFetch" class="primary">Fetch</button>
-      <button id="btnAiFormat">Format with AI (+ test cases)</button>
-      <span class="note" id="importStatus"></span>
-    </div>
-    <div class="note" id="importMeta" style="margin-bottom:8px"></div>
-    <div class="layout">
-      <div class="editor">
-        <div class="path">Title (as shown in the app)</div>
-        <input id="impTitle" type="text" style="width:100%"/>
-        <div class="path" style="margin-top:10px">README.md - the statement (Markdown; the AI pass rewrites this)</div>
-        <textarea id="impReadme" style="height:36vh" placeholder="Fetch a problem first"></textarea>
-        <div class="path" style="margin-top:10px">Test cases (JSON from the AI pass, editable: {"entry": "...", "cases": [{"name": "...", "args": [...], "expected": ...}]})</div>
-        <textarea id="impTests" style="height:15vh" placeholder="(optional - run Format with AI to generate)"></textarea>
+    <div class="step">
+      <h2><span class="n">1</span>Fetch from LeetCode</h2>
+      <div class="toolbar" style="margin-bottom:0">
+        <input id="lcInput" type="text" style="flex:1; min-width:260px" placeholder="https://leetcode.com/problems/two-sum/  or  two-sum"/>
+        <button id="btnFetch" class="primary">Fetch problem</button>
       </div>
-      <div class="tree" style="width:290px">
-        <div class="cat">Starter files (from LeetCode)</div>
-        <div id="impFiles" class="note">(fetch a problem first)</div>
-        <div class="cat" style="margin-top:12px">Difficulty (exactly one)</div>
-        <div id="impDifficulty">
-          <label class="tagopt"><input type="radio" name="impDiff" value="" checked/> None</label>
-          <label class="tagopt"><input type="radio" name="impDiff" value="Easy"/> Easy</label>
-          <label class="tagopt"><input type="radio" name="impDiff" value="Medium"/> Medium</label>
-          <label class="tagopt"><input type="radio" name="impDiff" value="Hard"/> Hard</label>
-        </div>
-        <div class="cat" style="margin-top:12px">Categories (tags)</div>
-        <div id="impTags"><span class="note">(loading)</span></div>
-        <input id="impNewTags" type="text" style="width:100%; margin-top:6px" placeholder="New tags, comma separated"/>
-        <div class="note" style="margin-top:6px">The problem appears in every picked category. Statement and files are shared; each category keeps its own code session for it.</div>
-        <button id="btnSaveProblem" class="primary" style="margin-top:10px">Save problem</button>
-        <div class="note" id="saveImportStatus" style="margin-top:6px"></div>
+      <div class="note status" id="importStatus"></div>
+      <div class="note" id="importMeta" style="margin-top:4px"></div>
+    </div>
+    <div class="step">
+      <h2><span class="n">2</span>Statement &amp; test cases</h2>
+      <div class="path">Title (as shown in the app)</div>
+      <input id="impTitle" type="text" style="width:100%"/>
+      <div class="path" style="margin-top:10px">README.md - the statement (Markdown)</div>
+      <textarea id="impReadme" style="height:36vh" placeholder="Fetch a problem first - or paste the statement here (premium problems arrive without one)"></textarea>
+      <div class="toolbar" style="margin-top:10px; margin-bottom:0">
+        <button id="btnAiFormat">Format with AI (+ test cases)</button>
+        <span class="note">Rewrites the statement above into the app's README format and fills the test cases below from its examples.</span>
+      </div>
+      <div class="path" style="margin-top:12px">Test cases (JSON from the AI pass, editable: {"entry": "...", "cases": [{"name": "...", "args": [...], "expected": ...}]})</div>
+      <textarea id="impTests" style="height:15vh" placeholder="(optional - run Format with AI to generate)"></textarea>
+    </div>
+    <div class="step">
+      <h2><span class="n">3</span>Files, difficulty &amp; categories</h2>
+      <div class="path">Starter files (from LeetCode, saved as-is + the tracer import)</div>
+      <div id="impFiles" class="note">(fetch a problem first)</div>
+      <div class="path" style="margin-top:12px">Difficulty (exactly one)</div>
+      <div id="impDifficulty" class="radio-row">
+        <label><input type="radio" name="impDiff" value="" checked/> None</label>
+        <label><input type="radio" name="impDiff" value="Easy"/> Easy</label>
+        <label><input type="radio" name="impDiff" value="Medium"/> Medium</label>
+        <label><input type="radio" name="impDiff" value="Hard"/> Hard</label>
+      </div>
+      <div class="path" style="margin-top:12px">Categories (topics - any number)</div>
+      <div id="impTags"><span class="note">(loading)</span></div>
+      <input id="impNewTags" type="text" style="width:100%; margin-top:6px" placeholder="New tags, comma separated"/>
+      <div class="note" style="margin-top:6px">The problem appears in every picked category. Statement and files are shared; each category keeps its own code session for it.</div>
+    </div>
+    <div class="step">
+      <h2><span class="n">4</span>Save</h2>
+      <div class="toolbar" style="margin-bottom:0">
+        <button id="btnSaveProblem" class="primary">Save problem</button>
+        <span class="note" id="saveImportStatus"></span>
       </div>
     </div>
   </section>
@@ -353,13 +375,14 @@ $('btnFetch').onclick = async () => {
     const lines = [];
     (data.snippets || []).forEach(s => {
       const fileName = FILE_BY_LANG[s.langSlug];
-      if (!fileName) { lines.push(`${esc(s.lang)} - skipped (no matching pad type)`); return; }
-      if (seen[fileName]) { lines.push(`${esc(s.lang)} - skipped (duplicate of ${esc(fileName)})`); return; }
+      if (!fileName) { lines.push(`<div class="file-row"><span>${esc(s.lang)}</span><span class="note">skipped - no matching pad type</span></div>`); return; }
+      if (seen[fileName]) { lines.push(`<div class="file-row"><span>${esc(s.lang)}</span><span class="note">skipped - duplicate of ${esc(fileName)}</span></div>`); return; }
       seen[fileName] = true;
       imp.starterFiles.push({name: fileName, content: s.code});
-      lines.push(`${esc(fileName)} - ${esc(s.lang)} (${s.code.length} chars)`);
+      lines.push(`<div class="file-row"><span>${esc(fileName)}</span><span class="note">${esc(s.lang)} · ${s.code.length} chars</span></div>`);
     });
-    $('impFiles').innerHTML = lines.join('<br/>') || '(no starter snippets)';
+    $('impFiles').innerHTML = lines.join('') || '(no starter snippets)';
+    $('impFiles').className = lines.length ? '' : 'note';
     $('importMeta').textContent = `${data.title} · ${data.difficulty} · LeetCode topics: ${(data.topics || []).join(', ') || '(none)'}`;
     document.querySelectorAll('input[name="impDiff"]').forEach(r => { r.checked = r.value === (data.difficulty || ''); });
     await loadImpTags(data.topics || []);
