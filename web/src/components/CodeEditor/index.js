@@ -2,9 +2,12 @@ import React from 'react';
 import faTrashAlt from '@fortawesome/fontawesome-free-solid/faTrashAlt';
 import faUser from '@fortawesome/fontawesome-free-solid/faUser';
 import faCaretUp from '@fortawesome/fontawesome-free-solid/faCaretUp';
+import faEye from '@fortawesome/fontawesome-free-solid/faEye';
+import faEyeSlash from '@fortawesome/fontawesome-free-solid/faEyeSlash';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { classes, extension, notifyAiSessionDeleted, LAYOUT_CHANGED_EVENT } from 'common/util';
 import { hasLocalCopy, originalContent } from 'common/savedCode';
+import { tracerFoldEnabled, setTracerFoldEnabled } from 'common/tracerFold';
 import { actions } from 'reducers';
 import { connect } from 'react-redux';
 import { languages } from 'common/config';
@@ -16,8 +19,17 @@ class CodeEditor extends React.Component {
     super(props);
 
     this.aceEditorRef = React.createRef();
-    this.state = { armedLang: null };
+    this.state = { armedLang: null, hideTracers: tracerFoldEnabled() };
     this.armTimeout = null;
+  }
+
+  // The footer toggle for tracer-code folding: persisted via
+  // common/tracerFold, which also notifies the editor to fold or
+  // unfold immediately.
+  toggleTracerFold() {
+    const hideTracers = !this.state.hideTracers;
+    this.setState({ hideTracers });
+    setTracerFoldEnabled(hideTracers);
   }
 
   componentDidMount() {
@@ -168,6 +180,15 @@ class CodeEditor extends React.Component {
                   }
                 </div>
               </div>
+            ) : null
+          }
+          {
+            isCode ? (
+              <button className={styles.tracer_toggle} onClick={() => this.toggleTracerFold()}
+                      title="Fold the tracer (visualization) code away so the core algorithm stays readable - the code itself is not changed">
+                <FontAwesomeIcon fixedWidth icon={this.state.hideTracers ? faEyeSlash : faEye}/>
+                {this.state.hideTracers ? 'Tracers hidden' : 'Tracers shown'}
+              </button>
             ) : null
           }
           {/* <span className={classes(styles.contributor, styles.label)}>Contributed by</span>

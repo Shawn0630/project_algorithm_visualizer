@@ -136,6 +136,25 @@
       }
     }
 
+    .tracer_toggle {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      height: 28px;
+      padding: 0 8px;
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: $font-size-normal;
+      white-space: nowrap;
+      cursor: pointer;
+      opacity: .85;
+
+      &:hover {
+        opacity: 1;
+      }
+    }
+
     .local_copy {
       display: flex;
       align-items: center;
