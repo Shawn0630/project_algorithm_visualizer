@@ -287,7 +287,7 @@ class Header extends BaseComponent {
             <Button icon={faBook} primary to="/license">License</Button>
             <Button icon={faExpandArrowsAlt} primary
                     onClick={() => this.handleClickFullScreen()}>Fullscreen</Button>
-            <Button icon={faCog} primary href="http://localhost:8088/api/admin">Admin</Button>
+            <Button icon={faCog} primary href="/api/admin">Admin</Button>
           </div>
         </div>
         <div className={styles.row}>
