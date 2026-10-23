@@ -4,6 +4,7 @@ export { default as BaseComponent } from './BaseComponent';
 export { default as Button } from './Button';
 export { default as CodeEditor } from './CodeEditor';
 export { default as Divider } from './Divider';
+export { default as DockWorkspace } from './DockWorkspace';
 export { default as Ellipsis } from './Ellipsis';
 export { default as ExpandableListItem } from './ExpandableListItem';
 export { default as FoldableAceEditor } from './FoldableAceEditor';

@@ -293,9 +293,10 @@ class Header extends BaseComponent {
             } */}
             {/* <Button icon={faFacebook} primary
                     href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`}>Share</Button> */}
-            <LayoutsMenu currentLayout={this.props.currentLayout} customLayouts={this.props.customLayouts}
+            <LayoutsMenu currentTree={this.props.currentTree} customLayouts={this.props.customLayouts}
                          onApplyLayout={this.props.onApplyLayout} onSaveLayout={this.props.onSaveLayout}
-                         onDeleteLayout={this.props.onDeleteLayout}/>
+                         onDeleteLayout={this.props.onDeleteLayout}
+                         panelsPresent={this.props.panelsPresent} onTogglePanel={this.props.onTogglePanel}/>
             <Button icon={faComments} primary selected={this.props.aiPanelOpened}
                     onClick={() => this.props.onToggleAiPanel && this.props.onToggleAiPanel()}>AI Assistant</Button>
             <Button icon={faBook} primary to="/license">License</Button>

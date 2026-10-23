@@ -62,6 +62,72 @@
   display: flex;
   gap: 3px;
   height: 44px;
+
+  > * {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+// Generic dock-tree miniature: rows/columns of cells, leaves are
+// labeled boxes.
+.d_row {
+  display: flex;
+  flex-direction: row;
+  gap: 3px;
+  height: 100%;
+  min-width: 0;
+}
+
+.d_col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  height: 100%;
+  min-height: 0;
+}
+
+.d_cell {
+  flex-basis: 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+
+  > * {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+}
+
+.d_leaf {
+  background-color: $color-overlay;
+  border: 1px solid $color-border;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0 2px;
+}
+
+.panel_list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+}
+
+.panel_row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  padding: 3px 2px;
+  cursor: pointer;
+
+  input {
+    cursor: pointer;
+  }
 }
 
 .pane {

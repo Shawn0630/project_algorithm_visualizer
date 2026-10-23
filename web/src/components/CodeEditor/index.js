@@ -19,6 +19,7 @@ class CodeEditor extends React.Component {
     super(props);
 
     this.aceEditorRef = React.createRef();
+    this.rootRef = React.createRef();
     this.state = { armedLang: null, hideTracers: tracerFoldEnabled() };
     this.armTimeout = null;
   }
@@ -44,6 +45,25 @@ class CodeEditor extends React.Component {
       });
     };
     window.addEventListener(LAYOUT_CHANGED_EVENT, this.handleLayoutChanged);
+    // Self-healing sizing: Ace only recomputes its scroll layers
+    // when resize() is called, and pane geometry changes arrive
+    // through many paths (dock drags, tab switches, panels opening
+    // or closing, window resizes). Observing this editor's own box
+    // covers all of them - without it, a resize missed at the
+    // wrong moment leaves Ace with stale (or zero) scroll metrics
+    // and a code pad that will not scroll.
+    if (typeof ResizeObserver !== 'undefined' && this.rootRef.current) {
+      let scheduled = false;
+      this.aceResizeObserver = new ResizeObserver(() => {
+        if (scheduled) return;
+        scheduled = true;
+        window.requestAnimationFrame(() => {
+          scheduled = false;
+          if (this.aceEditorRef.current) this.aceEditorRef.current.resize();
+        });
+      });
+      this.aceResizeObserver.observe(this.rootRef.current);
+    }
   }
 
   componentDidUpdate(prevProps) {
@@ -57,6 +77,7 @@ class CodeEditor extends React.Component {
   componentWillUnmount() {
     if (this.armTimeout) window.clearTimeout(this.armTimeout);
     if (this.handleLayoutChanged) window.removeEventListener(LAYOUT_CHANGED_EVENT, this.handleLayoutChanged);
+    if (this.aceResizeObserver) this.aceResizeObserver.disconnect();
   }
 
   handleResize() {
@@ -119,7 +140,7 @@ class CodeEditor extends React.Component {
     const isCode = !!language || fileExt === 'json';
 
     return (
-      <div className={classes(styles.code_editor, className)}>
+      <div className={classes(styles.code_editor, className)} ref={this.rootRef}>
         {
           isCode ? (
             <FoldableAceEditor

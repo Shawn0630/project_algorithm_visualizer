@@ -1,0 +1,133 @@
+@import "~common/stylesheet/index";
+
+.dock {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+
+  .fill {
+    height: 100%;
+  }
+
+  .leaf {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+
+    .tab_bar {
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      background-color: $theme-dark;
+      border-bottom: 1px solid rgba($color-font, .08);
+      min-height: 26px;
+
+      .tab {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        padding: 0 6px 0 10px;
+        font-size: 12px;
+        color: rgba($color-font, .55);
+        cursor: grab;
+        border-right: 1px solid rgba($color-font, .06);
+        user-select: none;
+
+        &:active {
+          cursor: grabbing;
+        }
+
+        &.tab_active {
+          color: $color-font;
+          background-color: $theme-normal;
+          box-shadow: inset 0 2px 0 $color-highlight;
+        }
+
+        .tab_title {
+          padding: 4px 0;
+          white-space: nowrap;
+        }
+
+        .tab_close {
+          margin-left: 6px;
+          padding: 2px;
+          border-radius: 3px;
+          color: rgba($color-font, .4);
+          cursor: pointer;
+
+          &:hover {
+            color: $color-font;
+            background-color: rgba($color-font, .12);
+          }
+        }
+      }
+    }
+
+    .content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+
+      > * {
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+      }
+    }
+
+    .drop_zone {
+      position: absolute;
+      pointer-events: none;
+      background-color: rgba($color-highlight, .22);
+      border: 2px solid $color-highlight;
+      z-index: 30;
+
+      &.zone_center {
+        top: 6px;
+        right: 6px;
+        bottom: 6px;
+        left: 6px;
+      }
+
+      &.zone_left {
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 50%;
+      }
+
+      &.zone_right {
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 50%;
+      }
+
+      &.zone_top {
+        top: 0;
+        right: 0;
+        left: 0;
+        height: 50%;
+      }
+
+      &.zone_bottom {
+        right: 0;
+        bottom: 0;
+        left: 0;
+        height: 50%;
+      }
+    }
+  }
+}

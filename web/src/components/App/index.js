@@ -8,9 +8,9 @@ import {
   AiAssistant,
   BaseComponent,
   CodeEditor,
+  DockWorkspace,
   Header,
   Navigator,
-  ResizableContainer,
   TabContainer,
   TestPanel,
   ToastContainer,
@@ -18,8 +18,11 @@ import {
 } from 'components';
 import { AlgorithmApi, GitHubApi, VisualizationApi } from 'apis';
 import { actions } from 'reducers';
-import { createUserFile, extension, refineGist } from 'common/util';
-import { loadLayoutStore, saveLayoutStore } from 'common/layouts';
+import { createUserFile, extension, refineGist, VISUALIZE_CASE_EVENT } from 'common/util';
+import {
+  ensurePanel, findLeafByPanel, loadDockStore, normalizeTree, removePanel,
+  saveDockStore, setActivePanel, treePanels,
+} from 'common/dock';
 import { hydrateCodeCache } from 'common/savedCode';
 import { exts, languages } from 'common/config';
 import { LICENSE_MD, SCRATCH_PAPER_README_MD } from 'files';
@@ -29,22 +32,15 @@ class App extends BaseComponent {
   constructor(props) {
     super(props);
 
-    // The workspace arrangement is a layout (common/layouts):
-    // restored from the last session when one was saved, with the
-    // built-in Default strip as the starting point. Strip mode is
-    // the native four-pane row; focus mode is the 2x2 grid.
-    const layoutStore = loadLayoutStore();
-    const current = layoutStore.current;
+    // The workspace arrangement is a dock tree (common/dock):
+    // panels in split/tab groups the user rearranges by dragging.
+    // Restored from the last session when one was saved (the old
+    // strip/focus layout store migrates into a tree on first
+    // load), with the built-in Default tree as the starting point.
+    const dockStore = loadDockStore();
     this.state = {
-      layoutMode: current ? current.mode : 'strip',
-      workspaceVisibles: current && current.visibles ? [...current.visibles] : [true, true, true, false],
-      workspaceWeights: current && current.weights ? [...current.weights] : [1, 2, 2, 1.4],
-      focusCols: current && current.focus ? [...current.focus.cols] : [1, 1.15],
-      focusRows: current && current.focus ? [...current.focus.rows] : [1, 1],
-      focusRightRows: current && current.focus && current.focus.right ? [...current.focus.right] : [2.6, 1],
-      focusNavWeight: current && current.focus && current.focus.nav ? current.focus.nav : 1,
-      focusAiWeight: current && current.focus && current.focus.ai ? current.focus.ai : 1.6,
-      customLayouts: layoutStore.custom,
+      dockTree: dockStore.current,
+      customLayouts: dockStore.custom,
     };
 
     this.codeEditorRef = React.createRef();
@@ -52,14 +48,8 @@ class App extends BaseComponent {
     this.ignoreHistoryBlock = this.ignoreHistoryBlock.bind(this);
     this.handleClickTitleBar = this.handleClickTitleBar.bind(this);
     this.loadScratchPapers = this.loadScratchPapers.bind(this);
-    this.handleChangeWorkspaceWeights = this.handleChangeWorkspaceWeights.bind(this);
-    // The Focus handlers must be bound too: ResizableContainer
-    // calls onChangeWeights as a bare callback, and unbound these
-    // threw on this.setState - which is why the Focus splitters
-    // looked dead while the strip (bound above) always worked.
-    this.handleChangeFocusRows = this.handleChangeFocusRows.bind(this);
-    this.handleChangeFocusOuter = this.handleChangeFocusOuter.bind(this);
-    this.handleChangeFocusRight = this.handleChangeFocusRight.bind(this);
+    this.handleDockChange = this.handleDockChange.bind(this);
+    this.handleVisualizeCase = this.handleVisualizeCase.bind(this);
   }
 
   componentDidMount() {
@@ -80,16 +70,37 @@ class App extends BaseComponent {
       .catch(this.handleError);
 
     this.toggleHistoryBlock(true);
+    // Persist the arrangement as loaded (including a migrated
+    // legacy layout), so the store on disk always matches what
+    // is on screen from the first paint on.
+    this.persistDock();
+    // A visualized test case should be seen: if the Visualization
+    // panel shares a tab group, bring its tab forward.
+    window.addEventListener(VISUALIZE_CASE_EVENT, this.handleVisualizeCase);
+  }
+
+  handleVisualizeCase() {
+    const { dockTree } = this.state;
+    const leaf = findLeafByPanel(dockTree, 'viz');
+    if (leaf && leaf.active !== 'viz') {
+      this.handleDockChange(setActivePanel(dockTree, 'viz'));
+    }
   }
 
   componentWillUnmount() {
     delete window.signIn;
     delete window.signOut;
 
+    window.removeEventListener(VISUALIZE_CASE_EVENT, this.handleVisualizeCase);
     this.toggleHistoryBlock(false);
   }
 
   componentWillReceiveProps(nextProps) {
+    // A Build starting should be seen too: same tab activation as
+    // for a visualized case.
+    if (nextProps.current.shouldBuild && !this.props.current.shouldBuild) {
+      this.handleVisualizeCase();
+    }
     const { params } = nextProps.match;
     const { search } = nextProps.location;
     if (params !== this.props.match.params || search !== this.props.location.search) {
@@ -235,135 +246,109 @@ class App extends BaseComponent {
   selectDefaultTab() {
     const { ext } = this.props.env;
     const { files } = this.props.current;
-    const editingFile = files.find(file => extension(file.name) === 'json') ||
+    // Open on the code file, not on a JSON sidecar: the old
+    // json-first rule existed for scratch papers' visualization
+    // .json (kept, by name), but for problems it landed the pad
+    // on tests.json instead of the code the user came to edit.
+    const editingFile = files.find(file => file.name === 'visualization.json') ||
       files.find(file => extension(file.name) === ext) ||
       files.find(file => exts.includes(extension(file.name))) ||
+      files.find(file => extension(file.name) === 'json') ||
       files[files.length - 1];
     this.props.setEditingFile(editingFile);
   }
 
-  handleChangeWorkspaceWeights(workspaceWeights) {
-    this.setState({ workspaceWeights }, () => {
-      this.codeEditorRef.current.handleResize();
-      this.persistLayout();
+  // Docking: every arrangement change flows through here -
+  // normalize, persist, and give Ace a resize once the new
+  // geometry has settled (its ResizeObserver also catches it).
+  handleDockChange(tree) {
+    const dockTree = normalizeTree(tree);
+    if (!dockTree) return;
+    this.setState({ dockTree }, () => {
+      this.persistDock();
+      window.requestAnimationFrame(() => {
+        if (this.codeEditorRef.current) this.codeEditorRef.current.handleResize();
+      });
     });
   }
 
-  // Layouts: named arrangements of the workspace (common/layouts).
-  // Every change persists the current arrangement so a reload comes
-  // back exactly as the user left it.
-  currentLayoutSnapshot() {
-    const {
-      layoutMode, workspaceVisibles, workspaceWeights,
-      focusCols, focusRows, focusRightRows, focusNavWeight, focusAiWeight,
-    } = this.state;
-    return layoutMode === 'focus'
-      ? {
-        name: 'Current',
-        mode: 'focus',
-        focus: {
-          cols: [...focusCols],
-          rows: [...focusRows],
-          right: [...focusRightRows],
-          nav: focusNavWeight,
-          ai: focusAiWeight,
-        },
-        visibles: [...workspaceVisibles],
-      }
-      : { name: 'Current', mode: 'strip', visibles: [...workspaceVisibles], weights: [...workspaceWeights] };
-  }
-
-  persistLayout() {
-    saveLayoutStore({
+  persistDock() {
+    saveDockStore({
       custom: this.state.customLayouts,
-      current: this.currentLayoutSnapshot(),
+      current: this.state.dockTree,
     });
   }
 
-  applyLayout(layout) {
-    const after = () => {
-      if (this.codeEditorRef.current) this.codeEditorRef.current.handleResize();
-      this.persistLayout();
-    };
-    if (layout.mode === 'focus') {
-      this.setState({
-        layoutMode: 'focus',
-        focusCols: [...layout.focus.cols],
-        focusRows: [...layout.focus.rows],
-        focusRightRows: layout.focus.right ? [...layout.focus.right] : [2.6, 1],
-        focusNavWeight: layout.focus.nav || 1,
-        focusAiWeight: layout.focus.ai || 1.6,
-        ...(layout.visibles ? { workspaceVisibles: [...layout.visibles] } : {}),
-      }, after);
-    } else {
-      this.setState({
-        layoutMode: 'strip',
-        workspaceVisibles: [...layout.visibles],
-        workspaceWeights: [...layout.weights],
-      }, after);
-    }
+  applyLayout(entry) {
+    if (entry && entry.tree) this.handleDockChange(entry.tree);
   }
 
   saveCustomLayout(name) {
-    const entry = { ...this.currentLayoutSnapshot(), name };
+    const tree = JSON.parse(JSON.stringify(this.state.dockTree));
     this.setState(prev => ({
-      customLayouts: [...prev.customLayouts.filter(layout => layout.name !== name), entry],
-    }), () => this.persistLayout());
+      customLayouts: [...prev.customLayouts.filter(layout => layout.name !== name), { name, tree }],
+    }), () => this.persistDock());
   }
 
   deleteCustomLayout(name) {
     this.setState(prev => ({
       customLayouts: prev.customLayouts.filter(layout => layout.name !== name),
-    }), () => this.persistLayout());
+    }), () => this.persistDock());
   }
 
-  handleChangeFocusRows(focusRows) {
-    this.setState({ focusRows }, () => this.persistLayout());
+  togglePanel(panelId) {
+    const { dockTree } = this.state;
+    if (treePanels(dockTree).has(panelId)) {
+      const next = removePanel(dockTree, panelId);
+      if (next) this.handleDockChange(next);
+    } else {
+      this.handleDockChange(ensurePanel(dockTree, panelId));
+    }
   }
 
-  // The Focus outer container's weights are the four outer
-  // columns: [Navigator, left column, right column, AI Assistant]
-  // (hidden panes keep their weight; the container only moves
-  // weight between visible neighbours).
-  handleChangeFocusOuter(weights) {
-    this.setState({
-      focusNavWeight: weights[0],
-      focusCols: [weights[1], weights[2]],
-      focusAiWeight: weights[3],
-    }, () => this.persistLayout());
+  toggleNavigatorOpened() {
+    this.togglePanel('navigator');
   }
 
-  handleChangeFocusRight(focusRightRows) {
-    this.setState({ focusRightRows }, () => this.persistLayout());
-  }
-
-  toggleNavigatorOpened(navigatorOpened = !this.state.workspaceVisibles[0]) {
-    const workspaceVisibles = [...this.state.workspaceVisibles];
-    workspaceVisibles[0] = navigatorOpened;
-    this.setState({ workspaceVisibles }, () => this.persistLayout());
-  }
-
-  toggleAiPanelOpened(aiPanelOpened = !this.state.workspaceVisibles[3]) {
-    const workspaceVisibles = [...this.state.workspaceVisibles];
-    workspaceVisibles[3] = aiPanelOpened;
-    this.setState({ workspaceVisibles }, () => this.persistLayout());
+  toggleAiPanelOpened() {
+    this.togglePanel('ai');
   }
 
   handleClickTitleBar() {
     this.toggleNavigatorOpened();
   }
 
+  renderPanel(panelId) {
+    switch (panelId) {
+      case 'navigator':
+        return <Navigator/>;
+      case 'doc':
+        return <VisualizationViewer variant="doc" className={styles.visualization_viewer}/>;
+      case 'viz':
+        return <VisualizationViewer variant="viz" className={styles.visualization_viewer}/>;
+      case 'code':
+        return (
+          <TabContainer hideTestPanel className={styles.editor_tab_container}>
+            <CodeEditor ref={this.codeEditorRef}/>
+          </TabContainer>
+        );
+      case 'tests':
+        return <TestPanel/>;
+      case 'ai':
+        return <AiAssistant/>;
+      default:
+        return null;
+    }
+  }
+
   render() {
-    const {
-      layoutMode, workspaceVisibles, workspaceWeights,
-      focusCols, focusRows, focusRightRows, focusNavWeight, focusAiWeight,
-      customLayouts,
-    } = this.state;
+    const { dockTree, customLayouts } = this.state;
     const { titles, description, saved } = this.props.current;
 
     const title = `${saved ? '' : '(Unsaved) '}${titles.join(' - ')}`;
-    const navigatorOpened = workspaceVisibles[0];
-    const aiPanelOpened = workspaceVisibles[3];
+    const present = treePanels(dockTree);
+    const navigatorOpened = present.has('navigator');
+    const aiPanelOpened = present.has('ai');
 
     return (
       <div className={styles.app}>
@@ -374,49 +359,17 @@ class App extends BaseComponent {
         <Header className={styles.header} onClickTitleBar={this.handleClickTitleBar}
                 navigatorOpened={navigatorOpened} loadScratchPapers={this.loadScratchPapers}
                 aiPanelOpened={aiPanelOpened} onToggleAiPanel={() => this.toggleAiPanelOpened()}
-                currentLayout={this.currentLayoutSnapshot()}
+                currentTree={dockTree}
                 customLayouts={customLayouts}
-                onApplyLayout={layout => this.applyLayout(layout)}
+                panelsPresent={[...present]}
+                onTogglePanel={panelId => this.togglePanel(panelId)}
+                onApplyLayout={entry => this.applyLayout(entry)}
                 onSaveLayout={name => this.saveCustomLayout(name)}
                 onDeleteLayout={name => this.deleteCustomLayout(name)}
                 ignoreHistoryBlock={this.ignoreHistoryBlock}/>
-        {layoutMode === 'focus' ? (
-          // Focus: 2x2 grid - problem Markdown (top-left) over the
-          // Visualization, code pad (top-right) over the Testcase
-          // panel (which starts collapsed in this layout). The
-          // Navigator and the AI Assistant join as extra outer
-          // columns when toggled on, so the header toggles work in
-          // this mode too; every split here is draggable.
-          <ResizableContainer className={styles.workspace} horizontal
-                              weights={[focusNavWeight, focusCols[0], focusCols[1], focusAiWeight]}
-                              visibles={[workspaceVisibles[0], true, true, workspaceVisibles[3]]}
-                              onChangeWeights={this.handleChangeFocusOuter}>
-            <Navigator/>
-            <ResizableContainer className={styles.fill} weights={focusRows}
-                                visibles={[true, true]} onChangeWeights={this.handleChangeFocusRows}>
-              <VisualizationViewer variant="doc" className={styles.visualization_viewer}/>
-              <VisualizationViewer variant="viz" className={styles.visualization_viewer}/>
-            </ResizableContainer>
-            <ResizableContainer className={styles.fill} weights={focusRightRows}
-                                visibles={[true, true]} onChangeWeights={this.handleChangeFocusRight}>
-              <TabContainer hideTestPanel className={styles.editor_tab_container}>
-                <CodeEditor ref={this.codeEditorRef}/>
-              </TabContainer>
-              <TestPanel startCollapsed/>
-            </ResizableContainer>
-            <AiAssistant/>
-          </ResizableContainer>
-        ) : (
-          <ResizableContainer className={styles.workspace} horizontal weights={workspaceWeights}
-                              visibles={workspaceVisibles} onChangeWeights={this.handleChangeWorkspaceWeights}>
-            <Navigator/>
-            <VisualizationViewer className={styles.visualization_viewer}/>
-            <TabContainer className={styles.editor_tab_container}>
-              <CodeEditor ref={this.codeEditorRef}/>
-            </TabContainer>
-            <AiAssistant/>
-          </ResizableContainer>
-        )}
+        <DockWorkspace className={styles.workspace} tree={dockTree}
+                       onChange={this.handleDockChange}
+                       renderPanel={panelId => this.renderPanel(panelId)}/>
         <ToastContainer className={styles.toast_container}/>
       </div>
     );

@@ -2,21 +2,19 @@ import React from 'react';
 import faColumns from '@fortawesome/fontawesome-free-solid/faColumns';
 import { Button } from 'components';
 import { classes } from 'common/util';
-import { BUILTIN_LAYOUTS, PANE_NAMES, sameLayout } from 'common/layouts';
+import {
+  BUILTIN_PRESETS, PANELS, panelTitle, presetTree, sameTree,
+} from 'common/dock';
 import styles from './LayoutsMenu.module.scss';
 
-// The workspace layout picker. Layouts are designed around this
-// app's own panes, not borrowed from another product:
-//   Default - the native strip (Navigator / Visualization /
-//     Editor / AI Assistant), AI closed.
-//   Focus - a 2x2 grid: problem Markdown top-left, Visualization
-//     bottom-left, code pad top-right, Testcase panel bottom-
-//     right (starting collapsed).
-//   AI - the strip with the AI Assistant open on the right.
-// The user can snapshot the current arrangement (either mode)
-// under their own name. The popover is positioned fixed, anchored
-// to the button: the header clips overflow, so an absolutely
-// positioned popover inside it gets cut off.
+// The workspace layout picker for the docking system
+// (common/dock). The workspace is a tree of panels the user can
+// also rearrange directly by dragging panel tabs; this menu
+// holds the built-in starter trees (Default / Focus / AI), the
+// user's saved trees, and a Panels checklist for closing and
+// reopening panels without dragging. The popover is positioned
+// fixed, anchored to the button: the header clips overflow, so
+// an absolutely positioned popover inside it gets cut off.
 class LayoutsMenu extends React.Component {
   constructor(props) {
     super(props);
@@ -44,8 +42,8 @@ class LayoutsMenu extends React.Component {
     }
   }
 
-  apply(layout) {
-    this.props.onApplyLayout(layout);
+  apply(entry) {
+    this.props.onApplyLayout(entry);
     this.toggle(false);
   }
 
@@ -56,18 +54,24 @@ class LayoutsMenu extends React.Component {
     this.toggle(false);
   }
 
-  // Strip diagram: one bar per pane; hidden panes are faint
-  // slivers. Labels keep the four bars readable.
-  stripDiagram(layout) {
+  // A miniature of a dock tree: splits are flex boxes, leaves are
+  // labeled cells (a tabbed leaf lists its panels).
+  diagramNode(node) {
+    if (node.kind === 'leaf') {
+      return (
+        <div className={styles.d_leaf} title={node.panels.map(panelTitle).join(' / ')}>
+          <span className={styles.pane_label}>
+            {node.panels.map(id => ({ navigator: 'Nav', doc: 'Desc', viz: 'Viz', code: 'Code', tests: 'Test', ai: 'AI' }[id] || id)).join('·')}
+          </span>
+        </div>
+      );
+    }
     return (
-      <div className={styles.diagram}>
+      <div className={node.dir === 'row' ? styles.d_row : styles.d_col}>
         {
-          layout.visibles.map((visible, i) => (
-            <div key={i}
-                 title={PANE_NAMES[i]}
-                 className={classes(styles.pane, !visible && styles.pane_hidden)}
-                 style={visible ? { flexGrow: layout.weights[i] } : null}>
-              <span className={styles.pane_label}>{['Nav', 'Viz', 'Code', 'AI'][i]}</span>
+          node.children.map((child, i) => (
+            <div key={i} className={styles.d_cell} style={{ flexGrow: node.weights[i] }}>
+              {this.diagramNode(child)}
             </div>
           ))
         }
@@ -75,50 +79,22 @@ class LayoutsMenu extends React.Component {
     );
   }
 
-  // Focus diagram: the actual 2x2 grid - left column Markdown over
-  // Visualization, right column Code over Testcase.
-  focusDiagram(layout) {
-    const { cols, rows } = layout.focus;
+  card(entry, custom) {
+    const { currentTree } = this.props;
+    const active = sameTree(currentTree, entry.tree);
     return (
-      <div className={styles.diagram}>
-        <div className={styles.focus_col} style={{ flexGrow: cols[0] }}>
-          <div className={styles.pane} style={{ flexGrow: rows[0] }} title="Problem Markdown">
-            <span className={styles.pane_label}>MD</span>
-          </div>
-          <div className={styles.pane} style={{ flexGrow: rows[1] }} title="Visualization">
-            <span className={styles.pane_label}>Viz</span>
-          </div>
-        </div>
-        <div className={styles.focus_col} style={{ flexGrow: cols[1] }}>
-          <div className={styles.pane} style={{ flexGrow: 2 }} title="Code pad">
-            <span className={styles.pane_label}>Code</span>
-          </div>
-          <div className={styles.pane} style={{ flexGrow: 1 }} title="Test cases">
-            <span className={styles.pane_label}>Test</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  diagram(layout) {
-    return layout.mode === 'focus' ? this.focusDiagram(layout) : this.stripDiagram(layout);
-  }
-
-  card(layout, custom) {
-    const { currentLayout } = this.props;
-    const active = sameLayout(currentLayout, layout);
-    return (
-      <div key={(custom ? 'custom:' : 'builtin:') + layout.name}
+      <div key={(custom ? 'custom:' : 'builtin:') + entry.name}
            className={classes(styles.card, active && styles.card_active)}
-           onClick={() => this.apply(layout)}>
-        {this.diagram(layout)}
+           onClick={() => this.apply(entry)}>
+        <div className={styles.diagram}>
+          {this.diagramNode(entry.tree)}
+        </div>
         <div className={styles.card_name}>
-          <span>{layout.name}</span>
+          <span>{entry.name}</span>
           {
             custom ? (
               <span className={styles.card_delete} title="Delete this layout"
-                    onClick={e => { e.stopPropagation(); this.props.onDeleteLayout(layout.name); }}>
+                    onClick={e => { e.stopPropagation(); this.props.onDeleteLayout(entry.name); }}>
                 ×
               </span>
             ) : null
@@ -129,9 +105,10 @@ class LayoutsMenu extends React.Component {
   }
 
   render() {
-    const { customLayouts } = this.props;
+    const { customLayouts, panelsPresent, onTogglePanel } = this.props;
     const { open, anchor, saving, name } = this.state;
-    const customs = customLayouts || [];
+    const customs = (customLayouts || []).map(entry => ({ name: entry.name, tree: entry.tree }));
+    const builtins = BUILTIN_PRESETS.map(preset => ({ name: preset.name, tree: presetTree(preset.name) }));
     return (
       <div className={styles.layouts_menu} ref={el => { this.rootEl = el; }}>
         <Button icon={faColumns} primary selected={open} onClick={() => this.toggle()}>Layouts</Button>
@@ -142,18 +119,33 @@ class LayoutsMenu extends React.Component {
               <div className={styles.popover}
                    style={anchor ? { top: anchor.top, right: anchor.right } : null}>
                 <div className={styles.grid}>
-                  {BUILTIN_LAYOUTS.map(layout => this.card(layout, false))}
+                  {builtins.map(entry => this.card(entry, false))}
                 </div>
                 {
                   customs.length ? (
                     <React.Fragment>
                       <div className={styles.section}>My layouts</div>
                       <div className={styles.grid}>
-                        {customs.map(layout => this.card(layout, true))}
+                        {customs.map(entry => this.card(entry, true))}
                       </div>
                     </React.Fragment>
                   ) : null
                 }
+                <div className={styles.section}>Panels</div>
+                <div className={styles.panel_list}>
+                  {
+                    PANELS.map(panel => {
+                      const present = panelsPresent && panelsPresent.includes(panel.id);
+                      return (
+                        <label key={panel.id} className={styles.panel_row}>
+                          <input type="checkbox" checked={!!present}
+                                 onChange={() => onTogglePanel(panel.id)}/>
+                          <span>{panel.title}</span>
+                        </label>
+                      );
+                    })
+                  }
+                </div>
                 {
                   saving ? (
                     <div className={styles.save_row}>
