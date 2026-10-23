@@ -8,8 +8,16 @@
 // case's execution animates in the visualization pane exactly like
 // a hand-instrumented pad. The pad itself is never modified.
 //
-// Python and JavaScript are supported; other languages throw a
-// plain-language error the panel shows as-is.
+// ONLY the selected case runs: the pad's own top-level code (a
+// driver section, demo calls, a loop over its own example cases)
+// still executes once - its definitions are needed - but the
+// harness's first act is to empty the central command list
+// (Commander._commands / Commander.commands) that every tracer
+// records into, so none of the pad's own frames reach the
+// player. At that point the list holds only the pad's commands:
+// nothing before it in the run records any. Java needs none of
+// this: the harness's Main is the only entry point, so nothing
+// else in the file can run.
 const ENTRY_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 // An entry may be a bare method name ("search") or the
@@ -38,8 +46,11 @@ function pythonHarness(code, entry, args) {
 
 # ---- visualize this test case (auto-generated) ----
 import json as _viz_json
-from algorithm_visualizer import Tracer as _VizTracer, LogTracer as _VizLogTracer, Array1DTracer as _VizArray1DTracer, Layout as _VizLayout, VerticalLayout as _VizVerticalLayout
+from algorithm_visualizer import Commander as _VizCommander, Tracer as _VizTracer, LogTracer as _VizLogTracer, Array1DTracer as _VizArray1DTracer, Layout as _VizLayout, VerticalLayout as _VizVerticalLayout
 
+# Discard everything the file's own top-level code recorded
+# (its driver / demo runs): only the selected case plays.
+del _VizCommander._commands[:]
 _viz_args = _viz_json.loads(${argsLiteral(args)})
 _viz_log = _VizLogTracer()
 _viz_views = []
@@ -72,10 +83,20 @@ else:
 }
 
 function jsHarness(code, entry, args) {
+  // The require below is spelled with a concatenated name on
+  // purpose: the JS worker decides whether to prepend its
+  // tracer destructure by scanning the source for a literal
+  // require('algorithm-visualizer'), and that decision must be
+  // based on the PAD's code alone - if the wrapper's own
+  // require suppressed the prepend, pads that rely on it
+  // (tracer names without their own require) would break.
   return `${code}
 
 // ---- visualize this test case (auto-generated) ----
-const _viz = require('algorithm-visualizer');
+const _viz = require('algorithm' + '-visualizer');
+// Discard everything the file's own top-level code recorded
+// (its driver / demo runs): only the selected case plays.
+_viz.Commander.commands.length = 0;
 const _vizArgs = JSON.parse(${argsLiteral(args)});
 const _vizLog = new _viz.LogTracer();
 const _vizViews = [];
