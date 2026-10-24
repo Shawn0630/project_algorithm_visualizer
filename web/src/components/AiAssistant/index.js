@@ -91,6 +91,10 @@ const QUICK_ACTIONS = [
     instruction: 'Find and fix the bugs in the current code. Keep the overall approach unless it is fundamentally wrong; in your explanation, list each bug you fixed and why it was wrong.',
   },
   {
+    label: 'Give me hints',
+    instruction: 'Give me hints for this problem instead of a solution: nudge me step by step - the key observation, which algorithm and data structure fit and why, and the edge cases to watch. Do not write the solution and do not change my code: return the current file unchanged.',
+  },
+  {
     label: 'Add visualization',
     instruction: 'Instrument the current code with this app\'s tracers so the algorithm can be visualized: create the appropriate tracers, record the key steps as the algorithm runs, set the layout root exactly once, and if the file only defines a class or functions, append a driver that runs a representative example. Keep the algorithm logic itself unchanged.',
   },
