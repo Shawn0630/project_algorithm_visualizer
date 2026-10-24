@@ -104,11 +104,10 @@ function diffSegments(aText, bText) {
   return { aSegs, bSegs };
 }
 
-// The part of a pad record that lives in the database. (The
-// test-case generation CHAT also lives in the record, but it is
-// owned by the AI Assistant pane's Test Cases tab now - this
-// panel never writes that field, and the server merges fields
-// partially, so the two never clobber each other.)
+// The part of a pad record that lives in the database. (Older
+// records also carry a `chat` field from the removed test-case
+// generation chat; this panel never writes that field, and the
+// server merges fields partially, so it is simply left alone.)
 const persistSlice = pad => ({
   entry: pad.entry,
   cases: pad.cases,

@@ -280,58 +280,10 @@
     line-height: 1.5;
   }
 
-  // The pane's two per-pad tabs: Code AI | Test Cases.
-  .tab_row {
+  // The Code AI's one-tap quick actions, above the composer.
+  .quick_row {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
-
-    .ai_tab {
-      flex: 1;
-      padding: 5px 8px;
-      background: none;
-      border: 1px solid $color-border;
-      border-radius: 6px;
-      color: inherit;
-      font: inherit;
-      cursor: pointer;
-      opacity: .75;
-
-      &:hover {
-        opacity: 1;
-      }
-    }
-
-    .ai_tab_active {
-      background-color: $theme-light;
-      opacity: 1;
-      font-weight: bold;
-    }
-  }
-
-  // A test-case set inside the Test Cases tab (same visual
-  // language as the code AI's cases card).
-  .test_card {
-    margin-top: 8px;
-    padding: 8px;
-    background-color: $theme-normal;
-    border: 1px solid $color-border;
-    border-radius: 6px;
-
-    .test_card_title {
-      opacity: .7;
-      margin-bottom: 6px;
-    }
-
-    .test_case_line {
-      font-family: $font-family-monospace;
-      font-size: $font-size-normal;
-      white-space: nowrap;
-      overflow-x: auto;
-      line-height: 1.5;
-    }
-
-    .chip {
-      margin-top: 8px;
-    }
   }
 }
