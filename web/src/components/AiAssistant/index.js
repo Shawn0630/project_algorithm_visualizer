@@ -100,6 +100,26 @@ const QUICK_ACTIONS = [
   },
 ];
 
+// Quick actions for the Test Cases tab, mirroring the code tab's
+// row: each sends a preset instruction through the test-case
+// chat. That chat's prompt already carries the pad's current
+// case list, so Explain can walk the actual cases and the
+// generation actions can avoid duplicating them.
+const TEST_QUICK_ACTIONS = [
+  {
+    label: '✦ Generate test cases',
+    instruction: 'Generate test cases for this code: cover the main scenarios from the problem statement plus the basic edge cases. If cases already exist, add the ones that are missing instead of repeating them.',
+  },
+  {
+    label: 'Explain test cases',
+    instruction: 'Explain the current test cases one by one: for each case, the input it feeds the entry, the expected output and why that is the correct result, and which behavior, branch or edge it covers. Finish with any important scenario that is not covered yet. Do not generate or change any test cases.',
+  },
+  {
+    label: 'Add edge cases',
+    instruction: 'Add test cases for edge and boundary conditions the current cases do not already cover: empty or minimal inputs, a single element, duplicates, zero or negative values where the problem allows them, already-sorted and reverse-sorted inputs, and large inputs where relevant. Do not duplicate existing cases.',
+  },
+];
+
 // The page's problem statement for the test-case chat: the first
 // Readme (or other Markdown doc, LICENSE excluded), length-capped.
 function pageReadme(files) {
@@ -511,15 +531,6 @@ class AiAssistant extends React.Component {
     return (
       <React.Fragment>
         {
-          messages.length === 0 && !testSending ? (
-            <div>
-              <button className={styles.chip} onClick={() => this.sendTestChat('Generate a first set of test cases for this code.')}>
-                ✦ Generate test cases
-              </button>
-            </div>
-          ) : null
-        }
-        {
           messages.map((message, i) => (
             message.role === 'user' ? (
               <div key={i} className={styles.user_message}>{message.text}</div>
@@ -786,6 +797,14 @@ class AiAssistant extends React.Component {
         {
           inTests ? (
             <React.Fragment>
+              <div className={styles.quick_row}>
+                {TEST_QUICK_ACTIONS.map(action => (
+                  <button key={action.label} className={styles.chip} disabled={testSending || !isCode}
+                          onClick={() => this.sendTestChat(action.instruction)}>
+                    {action.label}
+                  </button>
+                ))}
+              </div>
               <div className={styles.row}>
                 <input className={styles.input} type="text" value={testInput} disabled={!isCode}
                        placeholder="Ask for test cases, e.g. add an empty-array case"
