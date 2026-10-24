@@ -9,7 +9,9 @@ import { Type } from './Type';
 //   - Categories are the problems' tags, one category per tag; a
 //     problem with several tags appears in each of them (its files
 //     are shared; its code sessions stay per category because the
-//     pad key contains the category key).
+//     pad key contains the category key). Difficulty is NOT a tag:
+//     it is metadata on the problem and rides along on each
+//     algorithm entry as `difficulty`.
 //   - The 'algorithm' root is seeded from the bundled algorithms/
 //     content on first boot; the 'leetcode' root holds only what
 //     the admin console imports.
@@ -28,12 +30,12 @@ class DbFile {
 }
 
 class DbAlgorithm {
-  constructor(public key: string, public name: string, public problemId: number) {
+  constructor(public key: string, public name: string, public problemId: number, public difficulty: string | null = null) {
   }
 
   toJSON() {
-    const {key, name} = this;
-    return {key, name};
+    const {key, name, difficulty} = this;
+    return {key, name, difficulty};
   }
 }
 
@@ -80,7 +82,7 @@ export class DbHierarchy {
         }
         usedKeys[key] = true;
         const category = new DbCategory(key, tree.category, type);
-        category.algorithms = tree.algorithms.map(algorithm => new DbAlgorithm(algorithm.slug, algorithm.title, algorithm.id));
+        category.algorithms = tree.algorithms.map(algorithm => new DbAlgorithm(algorithm.slug, algorithm.title, algorithm.id, algorithm.difficulty));
         categories.push(category);
       }
     }
@@ -107,6 +109,7 @@ export class DbHierarchy {
       categoryName: category.name,
       algorithmKey,
       algorithmName: algorithm.name,
+      difficulty: algorithm.difficulty,
       files,
       description,
     };

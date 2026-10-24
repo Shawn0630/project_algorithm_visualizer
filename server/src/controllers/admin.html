@@ -448,8 +448,10 @@ $('btnSaveProblem').onclick = async () => {
   if (!readme.trim()) { $('saveImportStatus').textContent = 'The README is empty.'; return; }
   const tags = [...document.querySelectorAll('#impTags input:checked')].map(i => i.value)
     .concat($('impNewTags').value.split(',').map(s => s.trim()).filter(Boolean));
+  // Difficulty is the problem's metadata, not a category: it
+  // travels as its own field, never inside tags.
   const diffRadio = document.querySelector('input[name="impDiff"]:checked');
-  if (diffRadio && diffRadio.value && !tags.includes(diffRadio.value)) tags.push(diffRadio.value);
+  const difficulty = diffRadio && diffRadio.value ? diffRadio.value : null;
   if (!tags.length) { $('saveImportStatus').textContent = 'Pick or add at least one category.'; return; }
   let tests = null;
   const testsText = $('impTests').value.trim();
@@ -459,7 +461,7 @@ $('btnSaveProblem').onclick = async () => {
   const files = [{name: 'README.md', content: readme}].concat(imp.starterFiles.filter(f => f.name !== 'README.md'));
   $('btnSaveProblem').disabled = true;
   try {
-    const {slug} = await api('POST', '/api/admin/problems', {source: 'leetcode', title, tags, files, tests});
+    const {slug} = await api('POST', '/api/admin/problems', {source: 'leetcode', title, tags, difficulty, files, tests});
     $('saveImportStatus').innerHTML = `Saved ✓ Slug: ${esc(slug)} - find it under the Leetcode tab in the picked categories.`;
     $('importStatus').textContent = '';
     await loadContent(); await loadImpTags(tags);

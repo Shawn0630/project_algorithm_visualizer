@@ -8,6 +8,7 @@ import {
   contentTree,
   deleteProblem,
   deleteProblemFile,
+  DIFFICULTY_VALUES,
   findProblem,
   listProblemFiles,
   listProblemTags,
@@ -392,13 +393,17 @@ export class AdminController extends Controller {
     if (!title || title.length > 200) return res.status(400).json({message: 'A problem title (up to 200 chars) is required.'});
     const tags = Array.isArray(body.tags) ? body.tags.filter((tag: any) => typeof tag === 'string' && tag.trim()).map((tag: string) => tag.trim().slice(0, 100)) : [];
     if (!tags.length) return res.status(400).json({message: 'Pick at least one category (tag) for the problem.'});
-    // A problem has exactly ONE difficulty but any number of
-    // topics; both travel as tags (categories are tags here),
-    // so the singularity is enforced at this choke point -
-    // the import form offers difficulty as a single-choice
-    // radio for the same reason.
-    const difficultyTags = tags.filter((tag: string) => ['Easy', 'Medium', 'Hard'].includes(tag));
-    if (difficultyTags.length > 1) return res.status(400).json({message: `A problem has exactly one difficulty - it was given ${difficultyTags.length} (${difficultyTags.join(', ')}). Keep one of Easy / Medium / Hard.`});
+    // Difficulty is metadata on the problem, NOT a category: it
+    // arrives as its own field (the import form's single-choice
+    // radio). Difficulty names sent inside tags by older clients
+    // are lifted out - the first one becomes the difficulty - and
+    // never stored as tags.
+    const difficultyFromTags = tags.find((tag: string) => DIFFICULTY_VALUES.includes(tag)) || null;
+    const cleanTags = tags.filter((tag: string) => !DIFFICULTY_VALUES.includes(tag));
+    if (!cleanTags.length) return res.status(400).json({message: 'Pick at least one category (tag) for the problem.'});
+    const difficulty = typeof body.difficulty === 'string' && DIFFICULTY_VALUES.includes(body.difficulty)
+      ? body.difficulty
+      : difficultyFromTags;
     if (!Array.isArray(body.files) || !body.files.length) return res.status(400).json({message: 'The problem needs at least one file (its README).'});
     const files: ProblemFile[] = [];
     let total = 0;
@@ -419,7 +424,7 @@ export class AdminController extends Controller {
         else files.push({name: 'tests.json', content: testsJson});
       }
     }
-    const problem = saveImportedProblem({root, title, tags, files});
+    const problem = saveImportedProblem({root, title, tags: cleanTags, files, difficulty});
     this.server.hierarchy.refresh();
     return res.json({ok: true, id: problem.id, slug: problem.slug});
   };
