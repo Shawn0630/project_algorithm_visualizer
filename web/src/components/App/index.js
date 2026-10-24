@@ -28,6 +28,44 @@ import { exts, languages } from 'common/config';
 import { LICENSE_MD, SCRATCH_PAPER_README_MD } from 'files';
 import styles from './App.module.scss';
 
+// The code pad's open file is remembered per page (in
+// localStorage), so a refresh - or a later visit - reopens the
+// file the user was actually editing instead of snapping back
+// to the default-language file. This matters most on imported
+// LeetCode problems, which carry one starter file per language:
+// opening code.py and refreshing used to land back on code.js.
+const EDITING_FILE_KEY = 'av-editing-files-v1';
+
+function pageKeyOf(current) {
+  const { algorithm, scratchPaper } = current || {};
+  return algorithm ? `${algorithm.categoryKey}/${algorithm.algorithmKey}`
+    : scratchPaper ? `scratch:${scratchPaper.gistId}` : null;
+}
+
+function loadEditingFileMap() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(EDITING_FILE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function rememberEditingFile(current, fileName) {
+  const pageKey = pageKeyOf(current);
+  if (!pageKey || !fileName) return;
+  try {
+    const map = loadEditingFileMap();
+    if (map[pageKey] === fileName) return;
+    map[pageKey] = fileName;
+    const keys = Object.keys(map);
+    if (keys.length > 60) keys.slice(0, keys.length - 60).forEach(key => delete map[key]);
+    window.localStorage.setItem(EDITING_FILE_KEY, JSON.stringify(map));
+  } catch (error) {
+    // Storage unavailable: the pad simply uses its defaults.
+  }
+}
+
 class App extends BaseComponent {
   constructor(props) {
     super(props);
@@ -84,6 +122,16 @@ class App extends BaseComponent {
     const leaf = findLeafByPanel(dockTree, 'viz');
     if (leaf && leaf.active !== 'viz') {
       this.handleDockChange(setActivePanel(dockTree, 'viz'));
+    }
+  }
+
+  componentDidUpdate(prevProps) {
+    // Keep the per-page open-file memory current (see the note at
+    // the top of this file).
+    const prevFile = prevProps.current && prevProps.current.editingFile;
+    const nextFile = this.props.current && this.props.current.editingFile;
+    if (nextFile && nextFile !== prevFile) {
+      rememberEditingFile(this.props.current, nextFile.name);
     }
   }
 
@@ -246,11 +294,19 @@ class App extends BaseComponent {
   selectDefaultTab() {
     const { ext } = this.props.env;
     const { files } = this.props.current;
-    // Open on the code file, not on a JSON sidecar: the old
-    // json-first rule existed for scratch papers' visualization
-    // .json (kept, by name), but for problems it landed the pad
-    // on tests.json instead of the code the user came to edit.
-    const editingFile = files.find(file => file.name === 'visualization.json') ||
+    // The file this page had open last time wins over every
+    // default below - provided it still exists and is a file the
+    // code pad can show (a language file or JSON).
+    const rememberedName = loadEditingFileMap()[pageKeyOf(this.props.current)] || null;
+    const remembered = rememberedName && files.find(file => file.name === rememberedName &&
+      (exts.includes(extension(file.name)) || extension(file.name) === 'json'));
+    // Otherwise open on the code file, not on a JSON sidecar: the
+    // old json-first rule existed for scratch papers'
+    // visualization.json (kept, by name), but for problems it
+    // landed the pad on tests.json instead of the code the user
+    // came to edit.
+    const editingFile = remembered ||
+      files.find(file => file.name === 'visualization.json') ||
       files.find(file => extension(file.name) === ext) ||
       files.find(file => exts.includes(extension(file.name))) ||
       files.find(file => extension(file.name) === 'json') ||
