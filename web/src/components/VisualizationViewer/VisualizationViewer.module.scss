@@ -58,4 +58,20 @@
     font-size: 12px;
     opacity: .6;
   }
+
+  .doc_scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 10px;
+  }
+
+  .doc_loading {
+    padding: 8px 4px;
+    font-size: 12px;
+    opacity: .55;
+  }
 }

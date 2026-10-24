@@ -1,0 +1,62 @@
+@import "~common/stylesheet/index";
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid $color-border;
+  border-radius: $border-radius;
+  background-color: $theme-dark;
+  overflow: hidden;
+
+  &.bare {
+    border: none;
+    border-radius: 0;
+    background-color: transparent;
+    overflow: visible;
+  }
+
+  .screen {
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .empty {
+    padding: 16px;
+    font-size: 12px;
+    opacity: .6;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-top: 1px solid $color-border;
+
+    .control_button {
+      cursor: pointer;
+      padding: 3px 10px;
+      font-size: 12px;
+      color: inherit;
+      background: $color-overlay;
+      border: 1px solid $color-border;
+      border-radius: $border-radius;
+
+      &:hover {
+        background-color: $theme-normal;
+      }
+    }
+
+    .scrubber {
+      flex: 1;
+      min-width: 60px;
+    }
+
+    .step_label {
+      font-size: 11px;
+      opacity: .7;
+      white-space: nowrap;
+    }
+  }
+}

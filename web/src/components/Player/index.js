@@ -13,8 +13,13 @@ import { actions } from 'reducers';
 import { BaseComponent, Button, ProgressBar } from 'components';
 import styles from './Player.module.scss';
 
-// Same message extraction BaseComponent used for error toasts, kept so
-// the build-error panel shows exactly what the toast used to show.
+// The Markdown embed for the current visualization: a fenced
+// block holding the recorded chunks as JSON. Pasted into any
+// .md file in the app, the doc renderer plays it as an embedded
+// animation (see VisualizationViewer's splitDoc).
+export function visualizationSnippet(chunks) {
+  return '```visualization\n' + JSON.stringify({ v: 1, chunks }) + '\n```';
+}
 const errorMessage = error => {
   if (error && error.response) {
     const { data, statusText } = error.response;
@@ -31,6 +36,8 @@ class Player extends BaseComponent {
       speed: 2,
       playing: false,
       building: false,
+      exportOpen: false,
+      copied: false,
     };
 
     this.tracerApiSource = null;
@@ -181,6 +188,21 @@ class Player extends BaseComponent {
     this.setState({ speed });
   }
 
+  copySnippet(snippet) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(snippet)
+        .then(() => this.setState({ copied: true }))
+        .catch(() => {
+          if (this.exportTextRef) this.exportTextRef.select();
+        });
+    } else if (this.exportTextRef) {
+      // Clipboard API needs a secure context; on a plain-http LAN
+      // address the box above is the fallback: select it all so
+      // the user can copy with the keyboard.
+      this.exportTextRef.select();
+    }
+  }
+
   handleChangeProgress(progress) {
     const { chunks } = this.props.player;
     const cursor = Math.max(1, Math.min(chunks.length, Math.round(progress * chunks.length)));
@@ -223,6 +245,33 @@ class Player extends BaseComponent {
             }} minValue={0} maxValue={4} step={.5} value={speed}
             onChange={speed => this.handleChangeSpeed(speed)}/>
         </div>
+        <Button primary disabled={chunks.length <= 1}
+                onClick={() => this.setState({ exportOpen: true, copied: false })}>
+          Export MD
+        </Button>
+        {
+          this.state.exportOpen ? (
+            <div className={styles.export_overlay} onClick={() => this.setState({ exportOpen: false })}>
+              <div className={styles.export_box} onClick={e => e.stopPropagation()}>
+                <div className={styles.export_title}>Embed this visualization in Markdown</div>
+                <div className={styles.export_hint}>
+                  Paste this block into any .md note in the app — the Description pane plays it as an
+                  animation. ({Math.max(1, Math.round(visualizationSnippet(chunks).length / 1024))} KB)
+                </div>
+                <textarea className={styles.export_text} readOnly ref={ref => { this.exportTextRef = ref; }}
+                          value={visualizationSnippet(chunks)} onClick={e => e.target.select()}/>
+                <div className={styles.export_row}>
+                  <button className={styles.export_button} onClick={() => this.copySnippet(visualizationSnippet(chunks))}>
+                    {this.state.copied ? '✓ Copied' : 'Copy'}
+                  </button>
+                  <button className={styles.export_button} onClick={() => this.setState({ exportOpen: false })}>
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null
+        }
       </div>
     );
   }

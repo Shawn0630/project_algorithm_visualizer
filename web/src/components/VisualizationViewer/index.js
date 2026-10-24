@@ -1,6 +1,6 @@
 import React from 'react';
 import { connect } from 'react-redux';
-import { BaseComponent } from 'components';
+import { BaseComponent, TracerStage } from 'components';
 import { actions } from 'reducers';
 import styles from './VisualizationViewer.module.scss';
 import * as TracerClasses from 'core/tracers';
@@ -8,11 +8,79 @@ import * as LayoutClasses from 'core/layouts';
 import { classes, extension, VISUALIZE_CASE_EVENT } from 'common/util';
 import { TracerApi } from 'apis';
 
+// Splits a Markdown doc into segments: prose segments render
+// through the MarkdownTracer as usual, and ```visualization
+// fences (the Player's "Export for Markdown" output - a JSON
+// object holding the recorded chunks) become embedded mini
+// players. A fence whose payload does not parse stays prose, so
+// a broken embed degrades to a code block, never to a crash.
+function splitDoc(content) {
+  const segments = [];
+  const fence = /```visualization[ \t]*\n([\s\S]*?)```/g;
+  let last = 0;
+  let match = fence.exec(content);
+  const pushMd = text => {
+    if (text.trim()) segments.push({ kind: 'md', text });
+  };
+  while (match !== null) {
+    pushMd(content.slice(last, match.index));
+    let chunks = null;
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed && Array.isArray(parsed.chunks)) chunks = parsed.chunks;
+      else if (Array.isArray(parsed)) chunks = parsed;
+    } catch (error) {
+      chunks = null;
+    }
+    if (chunks) segments.push({ kind: 'viz', chunks });
+    else pushMd(match[0]);
+    last = match.index + match[0].length;
+    match = fence.exec(content);
+  }
+  pushMd(content.slice(last));
+  return segments.length ? segments : [{ kind: 'md', text: content }];
+}
+
+// One prose segment of a doc: rendered through the same
+// MarkdownTracer pipeline as a whole doc, as its own little
+// stage so viz embeds can sit between prose segments.
+class MdSegment extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { commands: null };
+    this.fetchToken = 0;
+  }
+
+  componentDidMount() {
+    this.fetch(this.props.text);
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.text !== this.props.text) this.fetch(this.props.text);
+  }
+
+  fetch(text) {
+    const token = ++this.fetchToken;
+    TracerApi.md({ code: text })
+      .then(commands => {
+        if (token === this.fetchToken) this.setState({ commands });
+      })
+      .catch(() => {
+        if (token === this.fetchToken) this.setState({ commands: [] });
+      });
+  }
+
+  render() {
+    if (!this.state.commands) return <div className={styles.doc_loading}>Rendering…</div>;
+    return <TracerStage bare static chunks={[{ commands: this.state.commands }]}/>;
+  }
+}
+
 class VisualizationViewer extends BaseComponent {
   constructor(props) {
     super(props);
 
-    this.state = { docFile: null, closedDocs: [] };
+    this.state = { docFile: null, docSegments: null, closedDocs: [] };
     this.reset();
   }
 
@@ -36,7 +104,7 @@ class VisualizationViewer extends BaseComponent {
     const key = `${this.pageKey()}:${file.name}`;
     this.setState(prev => ({ closedDocs: [...prev.closedDocs, key] }));
     if (this.state.docFile && this.state.docFile.name === file.name) {
-      this.setState({ docFile: null });
+      this.setState({ docFile: null, docSegments: null });
       const { chunks, cursor } = this.props.player;
       this.reset();
       if (chunks && chunks.length) this.update(chunks, cursor, [], 0);
@@ -90,7 +158,7 @@ class VisualizationViewer extends BaseComponent {
         // the player's current state. Forget the doc sync key
         // too - the doc is no longer on screen, so a later switch
         // back must not mistake "shown once" for "shown now".
-        if (this.state.docFile) this.setState({ docFile: null });
+        if (this.state.docFile) this.setState({ docFile: null, docSegments: null });
         this.docSyncKey = null;
         this.reset();
         const { chunks, cursor } = nextProps.player;
@@ -132,7 +200,7 @@ class VisualizationViewer extends BaseComponent {
     if (docFile) {
       const fresh = (nextProps.current.files || []).find(file => file.name === docFile.name);
       if (!fresh) {
-        this.setState({ docFile: null });
+        this.setState({ docFile: null, docSegments: null });
         const { chunks, cursor } = nextProps.player;
         this.reset();
         this.update(chunks, cursor, [], 0);
@@ -198,20 +266,17 @@ class VisualizationViewer extends BaseComponent {
   // Markdown files render here, in the center viewer, fully
   // independent of the code pad: switching tabs never changes the
   // pad's editing file, and editing or running code never disturbs
-  // the doc being read. The doc is rendered locally through the same
-  // MarkdownTracer pipeline the build uses.
+  // the doc being read. The doc is split into segments (see
+  // splitDoc): prose renders through the MarkdownTracer pipeline,
+  // and ```visualization embeds render as mini players.
   showDoc(file) {
-    TracerApi.md({ code: file.content }).then(commands => {
-      this.reset();
-      this.applyChunk({ commands });
-      this.props.setLineIndicator(undefined);
-      this.setState({ docFile: file });
-    });
+    this.props.setLineIndicator(undefined);
+    this.setState({ docFile: file, docSegments: splitDoc(file.content || '') });
   }
 
   showVisualization() {
     if (!this.state.docFile) return;
-    this.setState({ docFile: null });
+    this.setState({ docFile: null, docSegments: null });
     const { chunks, cursor } = this.props.player;
     this.reset();
     if (chunks && chunks.length) this.update(chunks, cursor, [], 0);
@@ -240,7 +305,7 @@ class VisualizationViewer extends BaseComponent {
         this.showDoc(target);
       }
     } else if (current) {
-      this.setState({ docFile: null });
+      this.setState({ docFile: null, docSegments: null });
       this.reset();
     }
   }
@@ -249,6 +314,7 @@ class VisualizationViewer extends BaseComponent {
     const { className, variant } = this.props;
     const mdFiles = this.visibleMdFiles();
     const docFile = this.state.docFile;
+    const docSegments = this.state.docSegments;
     // 'viz' variant: visualization only, no doc tabs. 'doc'
     // variant: the page's Markdown only, no Visualization tab.
     // Default (combined): both, as one tabbed viewer.
@@ -284,7 +350,19 @@ class VisualizationViewer extends BaseComponent {
           ) : null
         }
         <div className={styles.viewport}>
-          {this.root && this.root.render()}
+          {
+            docSegments ? (
+              <div className={styles.doc_scroll}>
+                {
+                  docSegments.map((segment, i) => segment.kind === 'viz' ? (
+                    <TracerStage key={i} chunks={segment.chunks} autoplay controls/>
+                  ) : (
+                    <MdSegment key={i} text={segment.text}/>
+                  ))
+                }
+              </div>
+            ) : (this.root && this.root.render())
+          }
           {variant === 'doc' && !mdFiles.length
             ? <div className={styles.doc_empty}>No Markdown document on this page.</div>
             : null}

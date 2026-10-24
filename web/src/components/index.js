@@ -18,4 +18,5 @@ export { default as ResizableContainer } from './ResizableContainer';
 export { default as TabContainer } from './TabContainer';
 export { default as TestPanel } from './TestPanel';
 export { default as ToastContainer } from './ToastContainer';
+export { default as TracerStage } from './TracerStage';
 export { default as VisualizationViewer } from './VisualizationViewer';
