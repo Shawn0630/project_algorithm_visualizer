@@ -5,25 +5,20 @@ import { Controller } from 'controllers/Controller';
 import { callLlm } from 'controllers/AiController';
 import { appendAiCall, readAiCalls } from 'utils/aiCallLog';
 import {
-  addProblemTag,
   contentTree,
-  createProblem,
   deleteProblem,
   deleteProblemFile,
   findProblem,
-  findProblemBySlug,
   listProblemFiles,
   listProblemTags,
   listTags,
   ProblemFile,
   removeProblemTag,
-  reseedAlgorithms,
   saveImportedProblem,
   upsertProblemFile,
 } from 'utils/db';
 import { htmlToMarkdown } from 'utils/htmlToMarkdown';
 import { formatStatement } from 'utils/statementFormat';
-import { createKey } from 'utils/hierarchy';
 import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
 
@@ -144,12 +139,9 @@ export class AdminController extends Controller {
     this.router.get('/content', this.getContent);
     this.router.get('/content/file', this.getFile);
     this.router.put('/content/file', this.putFile);
-    this.router.post('/content/algorithm', this.createAlgorithm);
     this.router.delete('/content/algorithm', this.deleteAlgorithm);
     this.router.post('/content/file', this.createFile);
     this.router.delete('/content/file', this.deleteFile);
-    this.router.post('/content/refresh', this.refreshContent);
-    this.router.post('/content/repull', this.repullContent);
     this.router.get('/tags', this.getTags);
     this.router.post('/leetcode/fetch', this.fetchLeetcode);
     this.router.post('/leetcode/generate', this.generateLeetcode);
@@ -204,28 +196,6 @@ export class AdminController extends Controller {
     return res.json({ok: true});
   };
 
-  createAlgorithm = (req: express.Request, res: express.Response) => {
-    const {source, category, name} = req.body || {};
-    const root = rootOf(source);
-    if (!root || typeof category !== 'string' || !category.trim() || typeof name !== 'string' || !name.trim()) {
-      return res.status(400).json({message: 'A source, a category and a name are required.'});
-    }
-    const title = name.trim();
-    const tag = category.trim();
-    if (findProblem(root, tag, title)) return res.json({ok: true, existed: true});
-    const sameSlug = findProblemBySlug(root, createKey(title));
-    if (sameSlug && sameSlug.title === title) {
-      // The same problem in another category: just add this tag, so
-      // it now appears in both - with one shared set of files.
-      addProblemTag(sameSlug.id, tag);
-      this.server.hierarchy.refresh();
-      return res.json({ok: true, linked: true});
-    }
-    createProblem({root, title, source: 'manual', tags: [tag], files: [{name: 'README.md', content: `# ${title}\n`}]});
-    this.server.hierarchy.refresh();
-    return res.json({ok: true});
-  };
-
   deleteAlgorithm = (req: express.Request, res: express.Response) => {
     const query: any = req.query;
     const root = rootOf(query.source);
@@ -262,23 +232,6 @@ export class AdminController extends Controller {
     deleteProblemFile(problem.id, String(query.file || ''));
     this.server.hierarchy.refresh();
     return res.json({ok: true});
-  };
-
-  refreshContent = (req: express.Request, res: express.Response) => {
-    this.server.hierarchy.refresh();
-    res.json({ok: true});
-  };
-
-  // Re-seed: replaces every seed-sourced problem with the bundled
-  // algorithms/ content (imported problems are untouched).
-  repullContent = (req: express.Request, res: express.Response) => {
-    try {
-      const count = reseedAlgorithms();
-      this.server.hierarchy.refresh();
-      return res.json({ok: true, count});
-    } catch (error) {
-      return res.status(400).json({message: (error as Error).message});
-    }
   };
 
   getTags = (req: express.Request, res: express.Response) => {

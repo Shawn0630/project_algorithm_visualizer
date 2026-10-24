@@ -77,10 +77,7 @@
       <span>Source:</span>
       <button id="srcAlgorithms" class="active">Algorithms</button>
       <button id="srcLeetcode">LeetCode</button>
-      <button id="btnRefresh">Refresh</button>
-      <button id="btnRepull">Re-seed Algorithms</button>
-      <button id="btnNewAlgo" class="primary">New Algorithm</button>
-      <span class="note">Content is stored in the server database (server/data/visualizer.db); edits are durable and take effect immediately. A problem can appear in several categories (tags): its statement and files are shared, but each category keeps its own code session. Creating an algorithm with the name of an existing problem (in another category) just adds it to this category too.</span>
+      <span class="note">Content is stored in the server database (server/data/visualizer.db); edits are durable and take effect immediately. A problem can appear in several categories (tags): its statement and files are shared, but each category keeps its own code session.</span>
     </div>
     <div class="layout">
       <div class="tree" id="tree"></div>
@@ -227,23 +224,6 @@ async function selectFile(file) {
 }
 $('srcAlgorithms').onclick = () => { source = 'algorithms'; sel = {category:null, algorithm:null, file:null}; $('srcAlgorithms').classList.add('active'); $('srcLeetcode').classList.remove('active'); renderTree(); renderFiles(); };
 $('srcLeetcode').onclick = () => { source = 'leetcode'; sel = {category:null, algorithm:null, file:null}; $('srcLeetcode').classList.add('active'); $('srcAlgorithms').classList.remove('active'); renderTree(); renderFiles(); };
-$('btnRefresh').onclick = async () => { await api('POST', '/api/admin/content/refresh'); await loadContent(); };
-$('btnRepull').onclick = async () => {
-  if (!confirm('Re-seed replaces every seed problem with the bundled algorithms/ content from this install. Imported problems are not touched. Continue?')) return;
-  $('btnRepull').textContent = 'Seeding...';
-  try {
-    const {count} = await api('POST', '/api/admin/content/repull');
-    await loadContent();
-    $('saveStatus').textContent = `Re-seeded ${count} algorithm problems ✓`;
-  } catch (e) { $('saveStatus').textContent = 'Re-seed failed: ' + e.message; }
-  finally { $('btnRepull').textContent = 'Re-seed Algorithms'; }
-};
-$('btnNewAlgo').onclick = async () => {
-  const category = prompt('Category name (may be new):'); if (!category) return;
-  const name = prompt('Algorithm name:'); if (!name) return;
-  await api('POST', '/api/admin/content/algorithm', {source, category, name});
-  await loadContent(); selectAlgorithm(category, name);
-};
 $('btnSave').onclick = async () => {
   if (!sel.file) return;
   await api('PUT', '/api/admin/content/file', {source, category: sel.category, algorithm: sel.algorithm, file: sel.file, content: $('fileEditor').value});
