@@ -59,7 +59,12 @@ class VisualizationViewer extends BaseComponent {
     this.update(chunks, cursor);
     // A case visualization should be seen: leave Markdown-doc mode
     // so the playback shows (the Player loads the chunks itself).
-    this.handleVisualizeCase = () => this.showVisualization();
+    // The variant guard matters for dock instances reused across a
+    // doc/viz tab switch: the listener stays registered, but a doc
+    // pane must never flip to the player.
+    this.handleVisualizeCase = () => {
+      if (this.props.variant !== 'doc') this.showVisualization();
+    };
     window.addEventListener(VISUALIZE_CASE_EVENT, this.handleVisualizeCase);
   }
 
@@ -68,7 +73,29 @@ class VisualizationViewer extends BaseComponent {
   }
 
   componentWillReceiveProps(nextProps) {
-    if (this.props.variant === 'doc') {
+    // The dock reuses this very instance when a leaf's active
+    // panel switches between the 'doc' and 'viz' variants (same
+    // component at the same tree position), so mount-time setup
+    // never re-runs - and the variant must be read from nextProps:
+    // deciding from this.props (the OLD variant) leaves the pane
+    // stuck on whatever the previous variant was showing.
+    if (nextProps.variant !== this.props.variant) {
+      if (nextProps.variant === 'doc') {
+        this.ensureDoc(nextProps);
+      } else {
+        // Becoming the viz pane: drop any doc on screen and show
+        // the player's current state. Forget the doc sync key
+        // too - the doc is no longer on screen, so a later switch
+        // back must not mistake "shown once" for "shown now".
+        if (this.state.docFile) this.setState({ docFile: null });
+        this.docSyncKey = null;
+        this.reset();
+        const { chunks, cursor } = nextProps.player;
+        if (chunks && chunks.length) this.update(chunks, cursor, [], 0);
+      }
+      return;
+    }
+    if (nextProps.variant === 'doc') {
       this.ensureDoc(nextProps);
       return;
     }
