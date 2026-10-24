@@ -30,6 +30,28 @@ import styles from './AiAssistant.module.scss';
 const CODE_EXTS = ['js', 'java', 'py', 'cpp'];
 const STORAGE_KEY = 'av-ai-sessions-v1';
 const MODEL_KEY = 'av-ai-model-v1';
+const TRACE_KEY = 'av-ai-trace-v1';
+
+// The "Show AI process" toggle: when on, every AI reply grows an
+// expandable process section (the server trace: model, attempts,
+// pipeline steps, plus the full prompt and the raw response in
+// collapsed sub-sections). Default off - the pane then looks
+// exactly as it always did. Remembered across reloads.
+function loadTracePref() {
+  try {
+    return window.localStorage.getItem(TRACE_KEY) === '1';
+  } catch (error) {
+    return false;
+  }
+}
+
+// A trace duplicates the prompt (which embeds the whole file) and
+// the raw reply, so when session storage has to prune, older
+// messages keep their steps but shed those two heavy fields.
+function slimTrace(trace) {
+  if (!trace) return trace;
+  return { ...trace, messages: null, rawResponse: null, slimmed: true };
+}
 
 function loadModelPref() {
   try {
@@ -61,7 +83,7 @@ function saveSessions(sessions) {
         data[key] = {
           ...session,
           messages: session.messages.map((message, i) =>
-            i === session.messages.length - 1 ? message : { ...message, code: null }),
+            i === session.messages.length - 1 ? message : { ...message, code: null, trace: slimTrace(message.trace) }),
         };
       });
     }
@@ -153,6 +175,7 @@ class AiAssistant extends React.Component {
     this.state = {
       sessions: loadSessions(), instruction: '', busy: false, error: '',
       models: [], selectedModel: loadModelPref(),
+      showTrace: loadTracePref(),
       activeTab: 'code',
       testChats: {}, testInput: '', testSending: false, testError: '',
     };
@@ -211,6 +234,74 @@ class AiAssistant extends React.Component {
     } catch (error) {
       // Storage unavailable: the choice still applies to this page.
     }
+  }
+
+  toggleTrace() {
+    const next = !this.state.showTrace;
+    this.setState({ showTrace: next });
+    try {
+      window.localStorage.setItem(TRACE_KEY, next ? '1' : '0');
+    } catch (error) {
+      // Storage unavailable: the toggle still applies to this page.
+    }
+  }
+
+  // The expandable "process" section under an AI reply: the
+  // server trace's headline (model, time, attempts) and its
+  // pipeline steps in order; the full prompt and the raw model
+  // response sit in their own collapsed sub-sections because both
+  // can be very long. Renders nothing when the toggle is off or
+  // the reply carries no trace (older replies, endpoints without
+  // one).
+  renderTrace(trace) {
+    if (!this.state.showTrace || !trace) return null;
+    const steps = Array.isArray(trace.steps) ? trace.steps : [];
+    const marks = { ok: '✓', skipped: '–', triggered: '⚠', error: '✗', info: 'ℹ' };
+    return (
+      <details className={styles.trace}>
+        <summary>
+          过程 · {trace.model || 'unknown model'}{trace.usedFallback ? ' (fallback)' : ''}
+          {typeof trace.durationMs === 'number' ? ` · ${(trace.durationMs / 1000).toFixed(1)}s` : ''}
+          {typeof trace.attempts === 'number' ? ` · ${trace.attempts} attempt(s)${trace.retries ? ` · ${trace.retries} retries` : ''}` : ''}
+        </summary>
+        <div className={styles.trace_steps}>
+          {
+            steps.map((step, i) => (
+              <div key={i} className={styles.trace_step}>
+                <span className={styles.trace_step_name}>{marks[step.status] || '·'} {step.name}</span>
+                {typeof step.attempts === 'number' ? <span className={styles.trace_step_meta}>{step.attempts} attempt(s)</span> : null}
+                {typeof step.durationMs === 'number' ? <span className={styles.trace_step_meta}>{step.durationMs}ms</span> : null}
+                {step.detail ? <div className={styles.trace_detail}>{step.detail}</div> : null}
+              </div>
+            ))
+          }
+        </div>
+        {
+          Array.isArray(trace.messages) && trace.messages.length ? (
+            <details className={styles.trace_sub}>
+              <summary>Prompt sent to the model ({trace.messages.length} messages)</summary>
+              {
+                trace.messages.map((message, i) => (
+                  <div key={i} className={styles.trace_msg}>
+                    <div className={styles.trace_role}>{message.role}</div>
+                    <pre className={styles.code}>{typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 1)}</pre>
+                  </div>
+                ))
+              }
+            </details>
+          ) : null
+        }
+        {
+          trace.rawResponse ? (
+            <details className={styles.trace_sub}>
+              <summary>Raw model response</summary>
+              <pre className={styles.code}>{trace.rawResponse}</pre>
+            </details>
+          ) : null
+        }
+        {trace.slimmed ? <div className={styles.trace_detail}>(Older reply - its prompt and raw response were dropped to save storage space; the steps above are complete.)</div> : null}
+      </details>
+    );
   }
 
   componentWillUnmount() {
@@ -294,6 +385,7 @@ class AiAssistant extends React.Component {
       messages.push({
         from: 'ai', text: session.pending.explanation, code: session.pending.code, applied: false, superseded: true,
         testCases: session.pending.testCases || null, testEntry: session.pending.testEntry || '', casesApplied: !!session.pending.casesApplied,
+        trace: session.pending.trace || null,
       });
     }
     messages.push({ from: 'user', text });
@@ -323,7 +415,7 @@ class AiAssistant extends React.Component {
           } : undefined;
         })(),
       },
-    }).then(({ code, explanation, changed, syntax, partialSuspected, testCases, entry, runError, apiError }) => {
+    }).then(({ code, explanation, changed, syntax, partialSuspected, testCases, entry, runError, apiError, trace }) => {
       this.setState({ busy: false });
       // The third kind of AI result: a set of test cases riding
       // along with the reply. It is offered as its own apply action
@@ -339,6 +431,7 @@ class AiAssistant extends React.Component {
             code, explanation: explanation || '', syntax: syntax || null, partialSuspected: !!partialSuspected, hunks,
             runError: runError || null,
             apiError: apiError || null,
+            trace: trace || null,
             testCases: cases, testEntry: entry || '', casesApplied: false,
           },
         }, key);
@@ -348,6 +441,7 @@ class AiAssistant extends React.Component {
           messages: [...current.messages, {
             from: 'ai', text: explanation || '(The AI returned no explanation.)', code: null, applied: false,
             testCases: cases, testEntry: entry || '', casesApplied: false,
+            trace: trace || null,
           }],
         }, key);
       }
@@ -396,6 +490,7 @@ class AiAssistant extends React.Component {
         testCases: session.pending.testCases || null,
         testEntry: session.pending.testEntry || '',
         casesApplied: !!session.pending.casesApplied,
+        trace: session.pending.trace || null,
       }],
       pending: null,
     });
@@ -410,6 +505,7 @@ class AiAssistant extends React.Component {
         testCases: session.pending.testCases || null,
         testEntry: session.pending.testEntry || '',
         casesApplied: !!session.pending.casesApplied,
+        trace: session.pending.trace || null,
       }],
       pending: null,
     });
@@ -513,7 +609,7 @@ class AiAssistant extends React.Component {
         instruction,
         model: this.state.selectedModel || undefined,
       });
-    }).then(({ message, entry, mode, cases }) => {
+    }).then(({ message, entry, mode, cases, trace }) => {
       const next = [...working, {
         role: 'assistant',
         text: message || '',
@@ -521,6 +617,7 @@ class AiAssistant extends React.Component {
         mode: mode === 'replace' ? 'replace' : 'append',
         entry: entry || '',
         applied: false,
+        trace: trace || null,
       }].slice(-100);
       this.updateTestChat(next, key);
       this.setState({ testSending: false });
@@ -578,6 +675,7 @@ class AiAssistant extends React.Component {
                     </div>
                   ) : null
                 }
+                {this.renderTrace(message.trace)}
               </div>
             )
           ))
@@ -716,6 +814,7 @@ class AiAssistant extends React.Component {
           <button className={styles.chip} onClick={() => this.rejectProposal()}>✗ Discard all</button>
           <span className={styles.status}>or keep asking below</span>
         </div>
+        {this.renderTrace(pending.trace)}
       </div>
     );
   }
@@ -772,6 +871,13 @@ class AiAssistant extends React.Component {
             </div>
           ) : null
         }
+        <div className={styles.trace_toggle_row}>
+          <label className={styles.trace_toggle}>
+            <input type="checkbox" checked={this.state.showTrace} onChange={() => this.toggleTrace()}/>
+            显示 AI 过程
+          </label>
+          <span className={styles.trace_toggle_hint}>model, prompt, raw reply and pipeline steps under each reply</span>
+        </div>
         <div className={styles.tab_row}>
           {
             isMd ? (
@@ -816,6 +922,7 @@ class AiAssistant extends React.Component {
                             ? this.renderCasesCard(message.testCases, message.testEntry, message.casesApplied, () => this.applyMessageCases(i))
                             : null
                         }
+                        {this.renderTrace(message.trace)}
                       </div>
                     )
                   ))

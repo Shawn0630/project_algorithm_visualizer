@@ -9,6 +9,36 @@ import { validateApiUsage } from 'utils/apiSurface';
 import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
 
+// One recorded step of an AI call's processing pipeline, and the
+// trace built from them. The trace rides along with the /assist
+// and /test-chat responses so the AI Assistant pane can show -
+// behind its "Show AI process" toggle - what actually happened:
+// which model ran (and whether the fallback took over), how many
+// attempts/retries the call needed, the exact messages sent, the
+// raw reply, and the outcome of every pipeline stage (completeness
+// check, library guard, API-surface validation, dry run, syntax
+// check), including the repair rounds those stages triggered.
+export interface AiTraceStep {
+  name: string;
+  status: 'ok' | 'skipped' | 'triggered' | 'error' | 'info';
+  detail?: string;
+  durationMs?: number;
+  attempts?: number;
+}
+
+export interface AiTrace {
+  endpoint: string;
+  model: string | null;
+  requestedModel: string | null;
+  usedFallback: boolean;
+  durationMs: number;
+  attempts: number;
+  retries: number;
+  messages: { role: string, content: any }[] | null;
+  rawResponse: string | null;
+  steps: AiTraceStep[];
+}
+
 // AI coding assistant for the editor ("coding pad"). The frontend sends
 // the current file and an instruction; the server makes ONE
 // chat-completions call to the configured OpenAI-compatible endpoint
@@ -587,13 +617,45 @@ export class AiController extends Controller {  constructor(server: Server) {
       ...turns,
       { role: 'user', content: instruction.trim().slice(0, 8000) },
     ];
+    const traceSteps: AiTraceStep[] = [{
+      name: 'Build prompt',
+      status: 'ok',
+      detail: `test-case chat: system prompt + pad context (${Array.isArray(currentCases) ? currentCases.length : 0} current cases) + ${turns.length} history turn(s), language ${String(language || 'js')}`,
+    }];
     try {
+      sentMessages = messages;
       const { content, usedModel, totalAttempts } = await callLlm(messages, requestedModel);
+      const primaryForTrace = requestedModel || process.env.LLM_MODEL || null;
+      traceSteps.push({
+        name: 'LLM call',
+        status: 'ok',
+        attempts: totalAttempts,
+        detail: `model ${usedModel}${usedModel !== primaryForTrace ? ` (fallback - primary was ${primaryForTrace})` : ''}${totalAttempts > 1 ? `, ${totalAttempts - 1} retries inside the call` : ''} - ${content.length} chars returned`,
+      });
       const parsed = parseTestChatReply(content);
+      traceSteps.push({
+        name: 'Parse reply',
+        status: parsed ? 'ok' : 'triggered',
+        detail: parsed
+          ? (parsed.cases ? `${parsed.cases.length} case(s), mode ${parsed.mode}` : 'message only, no case change')
+          : 'reply was not the expected JSON - delivered as a plain message with no case change',
+      });
       const reply = parsed || { message: stripFence(content).trim() || '(empty reply)', entry: '', mode: 'append' as const, cases: null };
       const finalEntry = reply.entry || (typeof entry === 'string' ? entry.trim() : '');
-      logCall({ model: usedModel, attempts: totalAttempts, rawResponse: content, reply: { ...reply, entry: finalEntry } as any });
-      return res.json({ message: reply.message, entry: finalEntry, mode: reply.mode, cases: reply.cases, model: usedModel });
+      const trace: AiTrace = {
+        endpoint: 'test-chat',
+        model: usedModel,
+        requestedModel,
+        usedFallback: usedModel !== primaryForTrace,
+        durationMs: Date.now() - startedAt,
+        attempts: totalAttempts,
+        retries: Math.max(0, totalAttempts - 1),
+        messages: messages as { role: string, content: any }[],
+        rawResponse: content,
+        steps: traceSteps,
+      };
+      logCall({ model: usedModel, attempts: totalAttempts, rawResponse: content, reply: { ...reply, entry: finalEntry } as any, trace } as any);
+      return res.json({ message: reply.message, entry: finalEntry, mode: reply.mode, cases: reply.cases, model: usedModel, trace });
     } catch (error) {
       const status = (error as any).status || 502;
       logCall({
@@ -656,6 +718,12 @@ export class AiController extends Controller {  constructor(server: Server) {
     let usedModel: string | null = primaryModel || null;
     let totalAttempts = 0;
     let lastSentMessages: any = null;
+    // Pipeline trace for the response (see AiTrace above): every
+    // stage appends a step, and every logical LLM round goes
+    // through callTraced so its attempts/duration are recorded.
+    const traceSteps: AiTraceStep[] = [];
+    let llmRounds = 0;
+    let fallbackUsed = false;
     const logCall = (partial: object) => appendAiCall({
       ts: new Date().toISOString(),
       status: 'ok',
@@ -735,6 +803,46 @@ export class AiController extends Controller {  constructor(server: Server) {
         }
       }
     };
+    // callModel + trace bookkeeping: one logical LLM round (the
+    // initial call or one repair round). The round's own retries
+    // happen inside callModel; the attempts delta measures them.
+    const callTraced = async (label: string, roundMessages: object[], modelName: string): Promise<string | null> => {
+      llmRounds += 1;
+      const attemptsBefore = totalAttempts;
+      const roundStartedAt = Date.now();
+      try {
+        const result = await callModel(roundMessages, modelName);
+        traceSteps.push({
+          name: label,
+          status: 'ok',
+          attempts: totalAttempts - attemptsBefore,
+          durationMs: Date.now() - roundStartedAt,
+          detail: `model ${modelName}${totalAttempts - attemptsBefore > 1 ? ` (${totalAttempts - attemptsBefore - 1} internal retries)` : ''}${result === null ? ' - empty/unrecognized response' : ` - ${result.length} chars returned`}`,
+        });
+        return result;
+      } catch (error) {
+        traceSteps.push({
+          name: label,
+          status: 'error',
+          attempts: totalAttempts - attemptsBefore,
+          durationMs: Date.now() - roundStartedAt,
+          detail: String((error && (error as Error).message) || error).slice(0, 600),
+        });
+        throw error;
+      }
+    };
+    const buildTrace = (rawResponse: string | null, sentMessages: any): AiTrace => ({
+      endpoint: 'assist',
+      model: usedModel,
+      requestedModel: requestedModel || null,
+      usedFallback: fallbackUsed,
+      durationMs: Date.now() - startedAt,
+      attempts: totalAttempts,
+      retries: Math.max(0, totalAttempts - llmRounds),
+      messages: sentMessages || null,
+      rawResponse,
+      steps: traceSteps,
+    });
     try {
       const messages: object[] = [
         {role: 'system', content: isMarkdown ? markdownSystemPrompt() : systemPrompt(String(language || 'js'))},
@@ -743,6 +851,11 @@ export class AiController extends Controller {  constructor(server: Server) {
         ...turns,
         {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`},
       ];
+      traceSteps.push({
+        name: 'Build prompt',
+        status: 'ok',
+        detail: `${messages.length} messages (system prompt${contextNote ? ' + window context' : ''}${readmeNote ? ' + page document' : ''} + ${turns.length} history turn(s) + user turn), language ${String(language || 'js')}${isMarkdown ? ', markdown-note mode (code guards skipped)' : ''}`,
+      });
       // Primary model first; if it stays overloaded / unreachable
       // through its whole retry chain and a fallback model is
       // configured (LLM_MODEL_FALLBACK, e.g. the lite variant), the
@@ -750,29 +863,41 @@ export class AiController extends Controller {  constructor(server: Server) {
       const fallbackModel = process.env.LLM_MODEL_FALLBACK;
       let content: string | null;
       try {
-        content = await callModel(messages, primaryModel!);
+        content = await callTraced('LLM call (primary)', messages, primaryModel!);
       } catch (error) {
         if (fallbackModel && fallbackModel !== primaryModel && isRetryableFailure(error)) {
+          fallbackUsed = true;
           usedModel = fallbackModel;
-          content = await callModel(messages, fallbackModel);
+          traceSteps.push({
+            name: 'Fallback model',
+            status: 'triggered',
+            detail: `primary model ${primaryModel} failed with a retryable error - switching to LLM_MODEL_FALLBACK ${fallbackModel}`,
+          });
+          content = await callTraced('LLM call (fallback)', messages, fallbackModel);
         } else {
           throw error;
         }
       }
       if (content === null) {
         logCall({status: 'error', error: 'The LLM returned an unrecognized response.'});
-        return res.status(502).json({message: 'The LLM returned an unrecognized response.'});
+        return res.status(502).json({message: 'The LLM returned an unrecognized response.', trace: buildTrace(null, messages)});
       }
       let reply = parseReply(content);
+      traceSteps.push({
+        name: 'Parse reply',
+        status: 'ok',
+        detail: `code ${reply.code.length} chars, explanation ${reply.explanation.length} chars${reply.testCases ? `, ${reply.testCases.length} test case(s)` : ''}`,
+      });
       // Completeness enforcement: if the reply looks elided (the diff
       // UI would treat missing regions as deletions), demand the full
       // file once more. If it still looks elided, hand it over with
       // the suspicion flagged instead of silently trusting it.
       let elidedFirstAttempt: string | null = null;
       let partialSuspected = !isMarkdown && reply.code !== code && looksElided(reply.code, code);
+      const elisionTriggered = partialSuspected;
       if (partialSuspected) {
         elidedFirstAttempt = content;
-        const retryContent = await callModel([
+        const retryContent = await callTraced('LLM call (completeness repair)', [
           ...messages,
           {role: 'assistant', content},
           {
@@ -787,6 +912,11 @@ export class AiController extends Controller {  constructor(server: Server) {
           partialSuspected = reply.code !== code && looksElided(reply.code, code);
         }
       }
+      traceSteps.push(isMarkdown
+        ? {name: 'Completeness (elision) check', status: 'skipped', detail: 'markdown-note mode - prose is not elision-checked'}
+        : elisionTriggered
+          ? {name: 'Completeness (elision) check', status: 'triggered', detail: `first reply looked elided - one completeness repair round sent; resent reply ${partialSuspected ? 'STILL looks elided (flagged as partial)' : 'passed the check'}`}
+          : {name: 'Completeness (elision) check', status: 'ok', detail: 'reply is not elided'});
       let changed = reply.code !== code;
       // Hallucinated-library guard: if the proposal imports or
       // calls a visualization API that does not exist in this app
@@ -795,8 +925,9 @@ export class AiController extends Controller {  constructor(server: Server) {
       // persists, flag it on the explanation rather than handing
       // over code that can never run without a word.
       let hallucinatedLib = changed && !isMarkdown ? findHallucinatedLib(reply.code) : null;
+      const hallucinationTriggered = hallucinatedLib;
       if (hallucinatedLib) {
-        const retryContent = await callModel([
+        const retryContent = await callTraced('LLM call (library-guard repair)', [
           ...messages,
           {role: 'assistant', content},
           {
@@ -817,6 +948,11 @@ export class AiController extends Controller {  constructor(server: Server) {
           };
         }
       }
+      traceSteps.push(isMarkdown
+        ? {name: 'Hallucinated-library guard', status: 'skipped', detail: 'markdown-note mode'}
+        : hallucinationTriggered
+          ? {name: 'Hallucinated-library guard', status: 'triggered', detail: `reply used ${hallucinationTriggered} - one repair round sent; ${hallucinatedLib ? `STILL present (${hallucinatedLib}) - warning attached to the reply` : 'rewritten reply is clean'}`}
+          : {name: 'Hallucinated-library guard', status: 'ok', detail: 'no invented library or method usage found'});
       // Static API-surface validation: the tracer reference is in
       // the prompt, yet models still misuse it in ways that
       // compile and run - Array2DTracer's 4-argument select on an
@@ -828,10 +964,14 @@ export class AiController extends Controller {  constructor(server: Server) {
       // the UI can show it with a fix-it action.
       let apiError: string | null = null;
       const dryRunLanguage = String(language || 'js');
+      let apiChecked = false;
+      let apiFirstViolations: string[] = [];
       if (changed && ['py', 'js', 'java'].includes(dryRunLanguage)) {
+        apiChecked = true;
         let violations = await validateApiUsage(dryRunLanguage, reply.code);
+        apiFirstViolations = violations.slice();
         if (violations.length) {
-          const retryContent = await callModel([
+          const retryContent = await callTraced('LLM call (API-check repair)', [
             ...messages,
             {role: 'assistant', content},
             {
@@ -855,6 +995,11 @@ export class AiController extends Controller {  constructor(server: Server) {
           }
         }
       }
+      traceSteps.push(!apiChecked
+        ? {name: 'Tracer API-surface check', status: 'skipped', detail: changed ? `language '${dryRunLanguage}' is not API-checked` : 'code unchanged - nothing to check'}
+        : apiFirstViolations.length
+          ? {name: 'Tracer API-surface check', status: 'triggered', detail: `${apiFirstViolations.length} violation(s): ${apiFirstViolations.join(' | ').slice(0, 400)} - one repair round sent; ${apiError ? 'violations remain - API error attached to the reply' : 'repaired reply passed'}`}
+          : {name: 'Tracer API-surface check', status: 'ok', detail: 'every tracer call matches the real library surface'});
       // Dry-run validation: when the proposal uses the tracer
       // library, actually run it (the same machinery a Build uses)
       // before handing it over - a syntax check cannot see a
@@ -871,10 +1016,14 @@ export class AiController extends Controller {  constructor(server: Server) {
       // lowercase `tracer` variable that was never defined, and
       // that must still count as visualization code.
       const vizMentioned = /tracer|algorithm_visualizer|layout/i.test(reply.code) || /tracer|algorithm_visualizer|layout/i.test(code);
+      let dryRunChecked = false;
+      let dryRunFirstError: string | null = null;
       if (changed && ['py', 'js', 'java'].includes(dryRunLanguage) && vizMentioned) {
+        dryRunChecked = true;
         let run = await dryRunVisualization(dryRunLanguage, reply.code);
         if (!run.ok) {
-          const retryContent = await callModel([
+          dryRunFirstError = run.error || 'The visualization run failed.';
+          const retryContent = await callTraced('LLM call (dry-run repair)', [
             ...messages,
             {role: 'assistant', content},
             {
@@ -898,12 +1047,30 @@ export class AiController extends Controller {  constructor(server: Server) {
           }
         }
       }
+      traceSteps.push(!dryRunChecked
+        ? {name: 'Dry run (execute the proposal)', status: 'skipped', detail: !changed ? 'code unchanged - nothing to run' : !['py', 'js', 'java'].includes(dryRunLanguage) ? `language '${dryRunLanguage}' is not dry-run` : 'no tracer / visualization usage mentioned in the code'}
+        : dryRunFirstError
+          ? {name: 'Dry run (execute the proposal)', status: 'triggered', detail: `first run failed: ${String(dryRunFirstError).split('\n')[0].slice(0, 300)} - one repair round sent and re-run; ${runError ? `STILL failing: ${String(runError).split('\n')[0].slice(0, 300)}` : 'repaired code runs and produces a visualization'}`}
+          : {name: 'Dry run (execute the proposal)', status: 'ok', detail: 'the proposal was executed and produced a working visualization'});
       // Check the proposal compiles before the user is asked to review
       // it; a broken proposal is labelled, not silently handed over.
       const syntax = changed ? await checkSyntax(String(language || 'js'), reply.code) : null;
+      traceSteps.push(!changed
+        ? {name: 'Syntax check', status: 'skipped', detail: 'code unchanged'}
+        : syntax === null
+          ? {name: 'Syntax check', status: 'skipped', detail: `no cheap syntax check exists for language '${String(language || 'js')}'`}
+          : syntax.ok
+            ? {name: 'Syntax check', status: 'ok', detail: 'the proposal compiles / parses cleanly'}
+            : {name: 'Syntax check', status: 'error', detail: String(syntax.error || 'syntax check failed').split('\n')[0].slice(0, 300)});
+      traceSteps.push({
+        name: 'Reply ready',
+        status: 'ok',
+        detail: changed ? 'code change proposed - shown to the user as a per-hunk diff to accept or reject' : 'no code change - explanation only',
+      });
+      const trace = buildTrace(content, messages);
       const fullReply = {...reply, changed, partialSuspected, runError: runError || undefined, apiError: apiError || undefined};
-      logCall({status: 'ok', rawResponse: content, elidedFirstAttempt, reply: fullReply, syntax});
-      return res.json({...fullReply, syntax});
+      logCall({status: 'ok', rawResponse: content, elidedFirstAttempt, reply: fullReply, syntax, trace} as any);
+      return res.json({...fullReply, syntax, trace});
     } catch (error) {
       const status = error && error.response && error.response.status;
       const data = error && error.response && error.response.data;
@@ -914,8 +1081,9 @@ export class AiController extends Controller {  constructor(server: Server) {
         ? ` - model "${usedModel}" was not found (404): the id is wrong or unavailable to this API key; Admin -> AI Call Log -> "List models my key can use" shows the exact ids`
         : '';
       const message = `LLM call failed: ${upstream || (error && error.message) || 'unknown error'}${hint}${totalAttempts > 1 ? ` (after ${totalAttempts} attempts)` : ''}`;
-      logCall({status: 'error', error: message});
-      return res.status(502).json({message});
+      traceSteps.push({name: 'Request failed', status: 'error', detail: message.slice(0, 600)});
+      logCall({status: 'error', error: message, trace: buildTrace(null, lastSentMessages)} as any);
+      return res.status(502).json({message, trace: buildTrace(null, lastSentMessages)});
     }
   };
 }

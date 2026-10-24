@@ -35,6 +35,34 @@
     }
   }
 
+  // The "Show AI process" toggle: reveals the per-reply trace
+  // sections (server-side pipeline record) in the log below.
+  .trace_toggle_row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .trace_toggle {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      white-space: nowrap;
+
+      input {
+        cursor: pointer;
+      }
+    }
+
+    .trace_toggle_hint {
+      opacity: .5;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+
   .empty_state {
     opacity: .6;
     line-height: 1.6;
@@ -74,6 +102,66 @@
     .status {
       margin-top: 4px;
       opacity: .6;
+    }
+
+    // One reply's process trace (only rendered when the pane's
+    // "Show AI process" toggle is on): a collapsible summary line,
+    // the pipeline steps in order, and the prompt / raw response
+    // in their own collapsed sub-sections.
+    .trace {
+      margin-top: 8px;
+      padding: 6px 8px;
+      background-color: $theme-normal;
+      border: 1px dashed $color-border;
+      border-radius: 6px;
+      font-size: 12px;
+
+      summary {
+        cursor: pointer;
+        opacity: .85;
+        line-height: 1.5;
+      }
+
+      .trace_steps {
+        margin-top: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+
+      .trace_step_name {
+        font-weight: bold;
+      }
+
+      .trace_step_meta {
+        margin-left: 6px;
+        opacity: .6;
+      }
+
+      .trace_detail {
+        opacity: .75;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .trace_sub {
+        margin-top: 6px;
+
+        summary {
+          opacity: .7;
+        }
+      }
+
+      .trace_msg {
+        margin-top: 6px;
+
+        .trace_role {
+          font-weight: bold;
+          opacity: .7;
+          text-transform: uppercase;
+        }
+      }
     }
 
     // A reply's test-case set (the third kind of AI result): the
