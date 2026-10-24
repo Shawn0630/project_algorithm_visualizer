@@ -22,6 +22,7 @@ import {
   upsertProblemFile,
 } from 'utils/db';
 import { htmlToMarkdown } from 'utils/htmlToMarkdown';
+import { formatStatement } from 'utils/statementFormat';
 import { createKey } from 'utils/hierarchy';
 import { fetchLlmModels } from 'utils/llmModels';
 import Server from 'Server';
@@ -152,6 +153,7 @@ export class AdminController extends Controller {
     this.router.get('/tags', this.getTags);
     this.router.post('/leetcode/fetch', this.fetchLeetcode);
     this.router.post('/leetcode/generate', this.generateLeetcode);
+    this.router.post('/format-markdown', this.formatMarkdown);
     this.router.post('/problems', this.saveProblem);
     this.router.get('/ai-calls', this.getAiCalls);
     this.router.get('/llm-models', this.getLlmModels);
@@ -334,6 +336,25 @@ export class AdminController extends Controller {
         message: `Fetching from LeetCode failed${status ? ` (HTTP ${status})` : ''}: ${(error as Error).message} - check the network connection and the slug.`,
       });
     }
+  };
+
+  // Deterministic Markdown cleanup for a statement pasted into
+  // the import box by hand (premium problems arrive without one).
+  // HTML pastes go through the same converter as fetched
+  // statements; plain-text pastes get their Example/Constraints
+  // structure rebuilt. No AI involved - the AI pass stays a
+  // separate, explicit step.
+  formatMarkdown = (req: express.Request, res: express.Response) => {
+    const {html, text} = req.body || {};
+    const hasHtml = typeof html === 'string' && !!html.trim();
+    const hasText = typeof text === 'string' && !!text.trim();
+    if (!hasHtml && !hasText) {
+      return res.status(400).json({message: 'Nothing to format - the clipboard content was empty.'});
+    }
+    if ((typeof html === 'string' && html.length > 1024 * 1024) || (typeof text === 'string' && text.length > 1024 * 1024)) {
+      return res.status(400).json({message: 'That paste is too large to format (over 1 MB).'});
+    }
+    return res.json({markdown: formatStatement({html, text})});
   };
 
   // AI formatting pass: turns the fetched statement into the app's

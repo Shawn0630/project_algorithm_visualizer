@@ -113,10 +113,11 @@
       <div class="path">Title (as shown in the app)</div>
       <input id="impTitle" type="text" style="width:100%"/>
       <div class="path" style="margin-top:10px">README.md - the statement (Markdown)</div>
-      <textarea id="impReadme" style="height:36vh" placeholder="Fetch a problem first - or paste the statement here (premium problems arrive without one)"></textarea>
+      <textarea id="impReadme" style="height:36vh" placeholder="Fetch a problem first - or paste the statement here (premium problems arrive without one). Pasting is auto-formatted to Markdown."></textarea>
       <div class="toolbar" style="margin-top:10px; margin-bottom:0">
+        <button id="btnMdFormat">Format as Markdown</button>
         <button id="btnAiFormat">Format with AI (+ test cases)</button>
-        <span class="note">Rewrites the statement above into the app's README format and fills the test cases below from its examples.</span>
+        <span class="note">Format as Markdown cleans the statement above (pasted HTML or plain text) into Markdown, no AI involved. AI rewrites it into the app's README format and fills the test cases below from its examples.</span>
       </div>
       <div class="path" style="margin-top:12px">Test cases (JSON from the AI pass, editable: {"entry": "...", "cases": [{"name": "...", "args": [...], "expected": ...}]})</div>
       <textarea id="impTests" style="height:15vh" placeholder="(optional - run Format with AI to generate)"></textarea>
@@ -397,9 +398,50 @@ $('btnFetch').onclick = async () => {
     $('btnFetch').disabled = false;
   }
 };
+// Deterministic Markdown cleanup for hand-pasted statements:
+// rich pastes carry HTML (converted like a fetched statement),
+// plain-text pastes get their Example/Constraints structure
+// rebuilt server-side. Falls back to the raw paste on any error,
+// so a paste is never lost.
+function insertAtCursor(ta, value) {
+  ta.focus();
+  if (!document.execCommand('insertText', false, value)) {
+    const {selectionStart: s, selectionEnd: en, value: v} = ta;
+    ta.value = v.slice(0, s) + value + v.slice(en);
+    ta.selectionStart = ta.selectionEnd = s + value.length;
+  }
+}
+$('impReadme').addEventListener('paste', async e => {
+  const cd = e.clipboardData || window.clipboardData;
+  if (!cd) return;
+  const html = cd.getData('text/html');
+  const text = cd.getData('text/plain');
+  if (!html && !text) return;
+  e.preventDefault();
+  try {
+    const data = await api('POST', '/api/admin/format-markdown', {html, text});
+    insertAtCursor($('impReadme'), data.markdown);
+    $('importStatus').textContent = 'Pasted & formatted to Markdown ✓';
+  } catch (err) {
+    insertAtCursor($('impReadme'), text);
+  }
+});
+$('btnMdFormat').onclick = async () => {
+  const ta = $('impReadme');
+  if (!ta.value.trim()) { $('importStatus').textContent = 'The statement box is empty - paste the problem statement first.'; return; }
+  $('btnMdFormat').disabled = true;
+  try {
+    const data = await api('POST', '/api/admin/format-markdown', {text: ta.value});
+    ta.value = data.markdown;
+    $('importStatus').textContent = 'Formatted to Markdown ✓ (no AI used).';
+  } catch (e) {
+    $('importStatus').textContent = 'Markdown format failed: ' + e.message;
+  } finally {
+    $('btnMdFormat').disabled = false;
+  }
+};
 $('btnAiFormat').onclick = async () => {
-  if (!imp.fetched) { $('importStatus').textContent = 'Fetch a problem first.'; return; }
-  if (!$('impReadme').value.trim()) { $('importStatus').textContent = 'The statement box is empty - paste the problem statement first (premium problems arrive without one), then Format.'; return; }
+  if (!imp.fetched) { $('importStatus').textContent = 'Fetch a problem first.'; return; }  if (!$('impReadme').value.trim()) { $('importStatus').textContent = 'The statement box is empty - paste the problem statement first (premium problems arrive without one), then Format.'; return; }
   $('importStatus').textContent = 'Asking the AI to format (this can take a while)...';
   $('btnAiFormat').disabled = true;
   try {
