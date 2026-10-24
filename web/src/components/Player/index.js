@@ -96,6 +96,13 @@ class Player extends BaseComponent {
       this.props.setBuildError(null);
       return;
     }
+    // Markdown notes are not runnable: the doc pane previews the
+    // note being edited, and the player's current visualization
+    // must survive note edits untouched.
+    if (extension(file.name) === 'md') {
+      this.props.setBuildError(null);
+      return;
+    }
     this.runBuild(file.content, extension(file.name), false);
   }
 

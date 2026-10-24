@@ -122,7 +122,10 @@ export default handleActions({
       ...state,
       files: [...state.files, file],
       editingFile: file,
-      shouldBuild: true,
+      // A new code file builds so its skeleton run shows; a new
+      // Markdown note does not build into the player at all (the
+      // doc pane previews it instead).
+      shouldBuild: extension(file.name) !== 'md',
     };
     return {
       ...newState,
@@ -149,7 +152,10 @@ export default handleActions({
       ...state,
       files: state.files.map(oldFile => oldFile === file ? editingFile : oldFile),
       editingFile,
-      shouldBuild: extension(editingFile.name) === 'md',
+      // Edits never auto-build: code rebuilds on file switch or
+      // the Build button, and Markdown is previewed by the doc
+      // pane, not the player.
+      shouldBuild: false,
     };
     return {
       ...newState,

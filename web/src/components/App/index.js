@@ -145,9 +145,14 @@ class App extends BaseComponent {
 
   componentWillReceiveProps(nextProps) {
     // A Build starting should be seen too: same tab activation as
-    // for a visualized case.
+    // for a visualized case. Markdown files never build into the
+    // player (the doc pane previews them), so their edits must not
+    // yank the viz panel forward.
     if (nextProps.current.shouldBuild && !this.props.current.shouldBuild) {
-      this.handleVisualizeCase();
+      const buildingFile = nextProps.current.editingFile;
+      if (!buildingFile || extension(buildingFile.name) !== 'md') {
+        this.handleVisualizeCase();
+      }
     }
     const { params } = nextProps.match;
     const { search } = nextProps.location;
@@ -308,8 +313,9 @@ class App extends BaseComponent {
     const editingFile = remembered ||
       files.find(file => file.name === 'visualization.json') ||
       files.find(file => extension(file.name) === ext) ||
-      files.find(file => exts.includes(extension(file.name))) ||
+      files.find(file => exts.includes(extension(file.name)) && extension(file.name) !== 'md') ||
       files.find(file => extension(file.name) === 'json') ||
+      files.find(file => extension(file.name) === 'md') ||
       files[files.length - 1];
     this.props.setEditingFile(editingFile);
   }

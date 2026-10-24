@@ -13,7 +13,7 @@ import styles from './TabContainer.module.scss';
 class TabContainer extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { armedFile: null };
+    this.state = { armedFile: null, addMenu: false, editingName: null, editingFile: null };
     this.armTimeout = null;
   }
 
@@ -21,14 +21,40 @@ class TabContainer extends React.Component {
     if (this.armTimeout) window.clearTimeout(this.armTimeout);
   }
 
-  handleAddFile() {
-    const { ext } = this.props.env;
+  // The + button offers every pad file kind (the four languages
+  // plus a Markdown note); the new file starts from that kind's
+  // skeleton, named after it (code.js, notes.md, ...) with a
+  // numeric suffix when the name is taken.
+  handleAddFile(language) {
     const { files } = this.props.current;
-    const language = languages.find(language => language.ext === ext);
     const newFile = { ...language.skeleton };
+    const dot = newFile.name.lastIndexOf('.');
+    const stem = dot > 0 ? newFile.name.slice(0, dot) : newFile.name;
     let count = 0;
-    while (files.some(file => file.name === newFile.name)) newFile.name = `code-${++count}.${ext}`;
+    while (files.some(file => file.name === newFile.name)) newFile.name = `${stem}-${++count}.${language.ext}`;
+    this.setState({ addMenu: false });
     this.props.addFile(newFile);
+  }
+
+  // Renaming is commit-based: typing only edits local state, and
+  // the rename lands on Enter or blur. (The old per-keystroke
+  // rename dispatched on the first character - renaming
+  // notes.md started by renaming it to "n", an extensionless
+  // name the pad cannot show, so the file vanished from the tab
+  // bar mid-rename.) A commit is also validated: the name must
+  // be non-empty, unique on the page, and keep a pad-visible
+  // extension (a language, Markdown or JSON).
+  commitRename() {
+    const { editingName, editingFile } = this.state;
+    this.setState({ editingName: null, editingFile: null });
+    if (!editingFile || editingName === null) return;
+    const name = editingName.trim();
+    if (!name || name === editingFile.name) return;
+    const { files } = this.props.current;
+    if (files.some(file => file !== editingFile && file.name === name)) return;
+    const ext = extension(name);
+    if (ext !== 'json' && !languages.some(language => language.ext === ext)) return;
+    this.props.renameFile(editingFile, name);
   }
 
   // Two-click close, mirroring the app's confirm-needed buttons: the
@@ -48,9 +74,10 @@ class TabContainer extends React.Component {
     this.props.deleteFile(file);
   }
 
-  // The code pad holds code files only (supported languages, plus
-  // JSON data files). Markdown and other text files render in the
-  // center viewer instead and get no tab here.
+  // The code pad holds the page's editable files: code files
+  // (supported languages), JSON data files and Markdown notes.
+  // Other text files render in the center viewer instead and get
+  // no tab here.
   visibleFiles() {
     const { files } = this.props.current;
     return files.filter(file => {
@@ -84,9 +111,18 @@ class TabContainer extends React.Component {
             files.map((file, i) => file === editingFile ? (
               <div className={classes(styles.title, styles.selected)} key={i}
                    onClick={() => this.props.setEditingFile(file)}>
-                <AutosizeInput className={styles.input_title} value={file.name}
+                <AutosizeInput className={styles.input_title} key={file.name}
+                               value={this.state.editingFile === file && this.state.editingName !== null
+                                 ? this.state.editingName : file.name}
                                onClick={e => e.stopPropagation()}
-                               onChange={e => this.props.renameFile(file, e.target.value)}/>
+                               onChange={e => this.setState({ editingName: e.target.value, editingFile: file })}
+                               onBlur={() => this.commitRename()}
+                               onKeyDown={e => {
+                                 if (e.key === 'Enter') e.currentTarget.blur();
+                                 if (e.key === 'Escape') {
+                                   this.setState({ editingName: null, editingFile: null }, () => e.currentTarget.blur());
+                                 }
+                               }}/>
                 {this.renderClose(file)}
               </div>
             ) : (
@@ -96,7 +132,8 @@ class TabContainer extends React.Component {
               </div>
             ))
           }
-          <div className={styles.title} onClick={() => this.handleAddFile()}>
+          <div className={styles.title} title="New file"
+               onClick={() => this.setState(prev => ({ addMenu: !prev.addMenu }))}>
             <FontAwesomeIcon fixedWidth icon={faPlus}/>
           </div>
           <div className={classes(styles.title, styles.fake)}/>
@@ -105,6 +142,21 @@ class TabContainer extends React.Component {
           {children}
         </div>
         {this.props.hideTestPanel ? null : <TestPanel/>}
+        {
+          this.state.addMenu ? (
+            <div className={styles.add_menu}>
+              {
+                languages.map(language => (
+                  <div key={language.ext} className={styles.add_item}
+                       onClick={() => this.handleAddFile(language)}>
+                    {language.name}
+                    <span className={styles.add_ext}>.{language.ext}</span>
+                  </div>
+                ))
+              }
+            </div>
+          ) : null
+        }
       </div>
     );
   }

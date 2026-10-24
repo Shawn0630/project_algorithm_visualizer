@@ -51,8 +51,10 @@ class VisualizationViewer extends BaseComponent {
   componentDidMount() {
     if (this.props.variant === 'doc') {
       // Doc pane (Focus layout, top-left): always shows a Markdown
-      // doc, never follows the player.
-      this.ensureDoc(this.props);
+      // doc, never follows the player. On mount, preview the
+      // Markdown file being edited, if any.
+      const editing = this.props.current.editingFile;
+      this.ensureDoc(this.props, editing && extension(editing.name) === 'md' ? editing.name : undefined);
       return;
     }
     const { chunks, cursor } = this.props.player;
@@ -81,7 +83,8 @@ class VisualizationViewer extends BaseComponent {
     // stuck on whatever the previous variant was showing.
     if (nextProps.variant !== this.props.variant) {
       if (nextProps.variant === 'doc') {
-        this.ensureDoc(nextProps);
+        const editing = nextProps.current.editingFile;
+        this.ensureDoc(nextProps, editing && extension(editing.name) === 'md' ? editing.name : undefined);
       } else {
         // Becoming the viz pane: drop any doc on screen and show
         // the player's current state. Forget the doc sync key
@@ -96,8 +99,30 @@ class VisualizationViewer extends BaseComponent {
       return;
     }
     if (nextProps.variant === 'doc') {
-      this.ensureDoc(nextProps);
+      const editing = nextProps.current.editingFile;
+      const prevEditing = this.props.current.editingFile;
+      const switchedToMd = editing && extension(editing.name) === 'md' &&
+        (!prevEditing || prevEditing.name !== editing.name);
+      this.ensureDoc(nextProps, switchedToMd ? editing.name : undefined);
       return;
+    }
+    // Combined viewer (not the 'viz'-only leaf): when the pad's
+    // editing file CHANGES to a Markdown note, the viewer
+    // previews it - the same note-preview flow the doc pane has.
+    // Clicking the Visualization doc tab hands the pane back to
+    // the player.
+    if (nextProps.variant !== 'viz') {
+      const editing = nextProps.current.editingFile;
+      const prevEditing = this.props.current.editingFile;
+      const switchedToMd = editing && extension(editing.name) === 'md' &&
+        (!prevEditing || prevEditing.name !== editing.name);
+      if (switchedToMd) {
+        const target = (nextProps.current.files || []).find(file => file.name === editing.name);
+        if (target && (!this.state.docFile || this.state.docFile.name !== target.name)) {
+          this.showDoc(target);
+          return;
+        }
+      }
     }
     // While a Markdown doc is shown, the viewer is decoupled from the
     // player: builds and cursor moves in the code pad do not touch
@@ -192,19 +217,22 @@ class VisualizationViewer extends BaseComponent {
     if (chunks && chunks.length) this.update(chunks, cursor, [], 0);
   }
 
-  // Doc-pane mode: keep a Markdown doc on screen at all times -
-  // the page's README by default (else its first Markdown file),
-  // following edits and page switches. The viz pane and the
-  // combined viewer never call this.
-  ensureDoc(props) {
+  // Doc-pane mode: keep a Markdown doc on screen at all times.
+  // When the pad's editing file CHANGES to a Markdown file, the
+  // pane previews that file (the note-preview flow: write in the
+  // pad, read here); otherwise the doc already shown stays, else
+  // the page's README (or its first Markdown file). Follows
+  // edits and page switches.
+  ensureDoc(props, forceName) {
     const files = (props.current.files || []).filter(file => extension(file.name) === 'md');
     const current = this.state.docFile;
+    const forced = forceName ? files.find(file => file.name === forceName) : undefined;
     const shown = current && files.find(file => file.name === current.name);
-    if (shown) {
+    if (!forced && shown) {
       if (shown.content !== current.content) this.showDoc(shown);
       return;
     }
-    const target = files.find(file => /readme/i.test(file.name)) || files[0];
+    const target = forced || files.find(file => /readme/i.test(file.name)) || files[0];
     if (target) {
       const syncKey = `${target.name}:${target.content.length}:${target.content.slice(0, 32)}`;
       if (this.docSyncKey !== syncKey) {
