@@ -755,11 +755,7 @@ class AiAssistant extends React.Component {
               <div className={styles.empty_state}>
                 The current file is not a code file. Switch to a code file (.js / .java / .py / .cpp) to see its AI session here.
               </div>
-            ) : inTests ? this.renderTestChat() : !hasSession && !busy ? (
-              <div className={styles.empty_state}>
-                This is the AI session for {editingFile.name}. Each file has its own session, and sessions are remembered. Ask the AI to write code, add tracers, explain, or find bugs - its changes arrive as a diff proposal first, and only the hunks you keep are applied to the editor. Or start with a quick action below.
-              </div>
-            ) : (
+            ) : inTests ? this.renderTestChat() : !hasSession && !busy ? null : (
               <React.Fragment>
                 {
                   session.messages.map((message, i) => (
