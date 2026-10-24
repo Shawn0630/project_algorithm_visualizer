@@ -22,8 +22,29 @@ import Server from 'Server';
 // required ones the endpoint answers 503 so the UI can say exactly
 // what is missing instead of failing obscurely.
 
-function systemPrompt(ext: string) {
+// The Markdown-note mode of /assist: the pad being edited is a
+// .md note attached to a problem, and the assistant is a writing
+// partner for it - same reply contract as the code mode (a JSON
+// object with the COMPLETE revised file plus an explanation, the
+// UI diffs it the same way), but no code rules: no tracer
+// reference, no guards, no dry runs.
+function markdownSystemPrompt() {
   return [
+    'You are the writing assistant inside Algorithm Visualizer, an app that animates algorithms from code. You are helping the user with ONE Markdown note file attached to a coding problem - their study notes for that problem.',
+    'Answer with ONLY a JSON object:',
+    '{"code": "<the COMPLETE revised Markdown file>", "explanation": "<short explanation, in the language the user writes in>"}',
+    'Rules:',
+    '- code must be the entire note after your changes, ready to replace the old one - the UI renders a diff from it, so completeness is a hard requirement: reproduce every section you do not change verbatim, however long the note is. Never elide, abbreviate or leave placeholders.',
+    '- If the instruction only asks a question or asks for an explanation, return the note UNCHANGED and put the answer in the explanation field.',
+    '- The page\'s documents (the problem statement, e.g. its README) arrive as context messages - ground the note in THIS problem: its actual requirements, examples, constraints and terminology, not generic advice.',
+    '- Keep the user\'s structure, headings and voice; extend, reorganize or polish only as far as the instruction asks.',
+    '- Write clean Markdown: short headings, tight lists, fenced code blocks for code, LaTeX only if the note already uses it.',
+    '- A note may contain ```visualization blocks holding JSON animation data. Those blocks are precious: preserve them exactly, character for character, and never invent new ones.',
+    '- This is a continuing session for this one note file: earlier turns are included as history, and the file content in the latest user message is authoritative.',
+  ].join('\n');
+}
+
+function systemPrompt(ext: string) {  return [
     'You are the coding assistant inside Algorithm Visualizer, an app that animates algorithms from code.',
     'You receive one source file and an instruction. Do the work and answer with ONLY a JSON object:',
     '{"code": "<the COMPLETE revised file content>", "explanation": "<short explanation in English>"}',
@@ -605,6 +626,11 @@ export class AiController extends Controller {  constructor(server: Server) {
           : '',
       ].filter(Boolean).join(' ')
       : '';
+    // Markdown pads run the note-writing mode: no tracer
+    // reference in the prompt and none of the code guards below
+    // (elision retry, hallucinated-library, API surface, dry
+    // run) apply to prose.
+    const isMarkdown = String(language || '') === 'md';
     // The page's Markdown document (problem statement), when the
     // frontend sends one: a separate context message, length-capped.
     const readme = context && typeof context === 'object' && context.readme && typeof context.readme === 'object'
@@ -711,7 +737,7 @@ export class AiController extends Controller {  constructor(server: Server) {
     };
     try {
       const messages: object[] = [
-        {role: 'system', content: systemPrompt(String(language || 'js'))},
+        {role: 'system', content: isMarkdown ? markdownSystemPrompt() : systemPrompt(String(language || 'js'))},
         ...(contextNote ? [{role: 'system', content: contextNote}] : []),
         ...(readmeNote ? [{role: 'system', content: readmeNote}] : []),
         ...turns,
@@ -743,7 +769,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       // file once more. If it still looks elided, hand it over with
       // the suspicion flagged instead of silently trusting it.
       let elidedFirstAttempt: string | null = null;
-      let partialSuspected = reply.code !== code && looksElided(reply.code, code);
+      let partialSuspected = !isMarkdown && reply.code !== code && looksElided(reply.code, code);
       if (partialSuspected) {
         elidedFirstAttempt = content;
         const retryContent = await callModel([
@@ -768,7 +794,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       // against the real algorithm_visualizer API once. If it
       // persists, flag it on the explanation rather than handing
       // over code that can never run without a word.
-      let hallucinatedLib = changed ? findHallucinatedLib(reply.code) : null;
+      let hallucinatedLib = changed && !isMarkdown ? findHallucinatedLib(reply.code) : null;
       if (hallucinatedLib) {
         const retryContent = await callModel([
           ...messages,

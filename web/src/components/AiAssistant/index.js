@@ -120,6 +120,25 @@ const TEST_QUICK_ACTIONS = [
   },
 ];
 
+// Quick actions for a Markdown note pad: same idea as the code
+// tab's row, but the instructions work on the note - the server
+// runs these through the markdown mode of /assist, with the
+// page's documents (the problem statement) as context.
+const MD_QUICK_ACTIONS = [
+  {
+    label: 'Summarize the problem',
+    instruction: 'Add a summary section to this note covering the problem statement from the page context: what is being asked, the input and output, the key constraints, and one worked example. Keep everything already in the note and return the complete file.',
+  },
+  {
+    label: 'Draft the approach',
+    instruction: 'Add an approach section to this note: the key observation, the algorithm and data structure to use, why it works, and the time and space complexity, all based on the problem statement in the page context. Keep everything already in the note and return the complete file.',
+  },
+  {
+    label: 'Improve this note',
+    instruction: 'Improve this note: fix the Markdown formatting, organize it under clear headings, tighten the wording, and keep every fact, example and code snippet. Return the complete file.',
+  },
+];
+
 // The page's problem statement for the test-case chat: the first
 // Readme (or other Markdown doc, LICENSE excluded), length-capped.
 function pageReadme(files) {
@@ -714,10 +733,13 @@ class AiAssistant extends React.Component {
   render() {
     const { editingFile } = this.props.current;
     const isCode = !!editingFile && CODE_EXTS.includes(extension(editingFile.name));
+    const isMd = !!editingFile && extension(editingFile.name) === 'md';
     const { instruction, busy, error, activeTab, testInput, testSending, testError } = this.state;
     const session = this.session();
     const hasSession = session.messages.length > 0 || session.pending;
-    const inTests = activeTab === 'tests';
+    // A Markdown pad has a note session only - the test-case
+    // chat needs a code file, so its tab is hidden for notes.
+    const inTests = activeTab === 'tests' && !isMd;
     const chat = this.testChat();
 
     return (
@@ -751,20 +773,30 @@ class AiAssistant extends React.Component {
           ) : null
         }
         <div className={styles.tab_row}>
-          <button className={`${styles.ai_tab} ${!inTests ? styles.ai_tab_active : ''}`}
-                  onClick={() => this.setState({ activeTab: 'code' })}>
-            Code AI
-          </button>
-          <button className={`${styles.ai_tab} ${inTests ? styles.ai_tab_active : ''}`}
-                  onClick={() => this.setState({ activeTab: 'tests' })}>
-            ✦ Test Cases
-          </button>
+          {
+            isMd ? (
+              <button className={`${styles.ai_tab} ${styles.ai_tab_active}`}>
+                ✎ Note AI
+              </button>
+            ) : (
+              <React.Fragment>
+                <button className={`${styles.ai_tab} ${!inTests ? styles.ai_tab_active : ''}`}
+                        onClick={() => this.setState({ activeTab: 'code' })}>
+                  Code AI
+                </button>
+                <button className={`${styles.ai_tab} ${inTests ? styles.ai_tab_active : ''}`}
+                        onClick={() => this.setState({ activeTab: 'tests' })}>
+                  ✦ Test Cases
+                </button>
+              </React.Fragment>
+            )
+          }
         </div>
         <div className={styles.log} ref={this.logRef}>
           {
-            !isCode ? (
+            !isCode && !isMd ? (
               <div className={styles.empty_state}>
-                The current file is not a code file. Switch to a code file (.js / .java / .py / .cpp) to see its AI session here.
+                The current file is not a code or Markdown file. Switch to a code file (.js / .java / .py / .cpp) or a Markdown note (.md) to see its AI session here.
               </div>
             ) : inTests ? this.renderTestChat() : !hasSession && !busy ? null : (
               <React.Fragment>
@@ -821,21 +853,23 @@ class AiAssistant extends React.Component {
           ) : (
             <React.Fragment>
               <div className={styles.quick_row}>
-                {QUICK_ACTIONS.map(action => (
-                  <button key={action.label} className={styles.chip} disabled={busy || !isCode}
+                {(isMd ? MD_QUICK_ACTIONS : QUICK_ACTIONS).map(action => (
+                  <button key={action.label} className={styles.chip} disabled={busy || (!isCode && !isMd)}
                           onClick={() => this.send(action.instruction)}>
                     {action.label}
                   </button>
                 ))}
               </div>
               <div className={styles.row}>
-                <input className={styles.input} type="text" value={instruction} disabled={!isCode}
-                       placeholder="Tell the AI what to do with this code, e.g. turn bubble sort into quicksort"
+                <input className={styles.input} type="text" value={instruction} disabled={!isCode && !isMd}
+                       placeholder={isMd
+                         ? 'Tell the AI what to do with this note, e.g. add a summary of the problem'
+                         : 'Tell the AI what to do with this code, e.g. turn bubble sort into quicksort'}
                        onChange={e => this.setState({ instruction: e.target.value })}
                        onKeyDown={e => {
                          if (e.key === 'Enter') this.send();
                        }}/>
-                <button className={styles.send} disabled={busy || !isCode || !instruction.trim()} onClick={() => this.send()}>
+                <button className={styles.send} disabled={busy || (!isCode && !isMd) || !instruction.trim()} onClick={() => this.send()}>
                   {busy ? 'Working...' : 'Send'}
                 </button>
               </div>
