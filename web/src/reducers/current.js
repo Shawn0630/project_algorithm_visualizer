@@ -1,7 +1,7 @@
 import { combineActions, createAction, handleActions } from 'redux-actions';
 import { FEATURES_MD, LICENSE_MD } from 'files';
 import { extension, isSaved } from 'common/util';
-import { overlaySavedCode, persistCode, dropSavedCode, moveSavedCode, resetSavedCode } from 'common/savedCode';
+import { overlaySavedCode, persistCode, dropSavedCode, moveSavedCode, resetSavedCode, noteUserFile, forgetUserFile } from 'common/savedCode';
 
 const prefix = 'CURRENT';
 
@@ -113,6 +113,11 @@ export default handleActions({
   },
   [addFile]: (state, { payload }) => {
     const { file } = payload;
+    // A user-added file must survive reloads: register it on the
+    // page's user-file list and keep its skeleton as its code
+    // copy, so the load path can re-create it.
+    noteUserFile(state, file.name);
+    persistCode(state, file.name, file.content);
     const newState = {
       ...state,
       files: [...state.files, file],
@@ -154,6 +159,7 @@ export default handleActions({
   [deleteFile]: (state, { payload }) => {
     const { file } = payload;
     dropSavedCode(state, file.name);
+    forgetUserFile(state, file.name);
     const index = state.files.indexOf(file);
     const files = state.files.filter(oldFile => oldFile !== file);
     const editingFile = files[Math.min(index, files.length - 1)];
