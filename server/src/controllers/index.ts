@@ -2,6 +2,7 @@ export { AdminController } from './AdminController';
 export { AiController } from './AiController';
 export { CodeCacheController } from './CodeCacheController';
 export { PadTestsController } from './PadTestsController';
+export { PadChatsController } from './PadChatsController';
 export { AlgorithmsController } from './AlgorithmsController';
 export { AuthController } from './AuthController';
 export { TestController } from './TestController';

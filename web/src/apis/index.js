@@ -60,6 +60,12 @@ const PadTestsApi = {
   remove: DELETE('/pad-tests'),
 };
 
+const PadChatsApi = {
+  list: GET('/pad-chats'),
+  put: PUT('/pad-chats'),
+  remove: DELETE('/pad-chats'),
+};
+
 const TestApi = {
   run: POST('/tests/run'),
 };
@@ -131,6 +137,7 @@ const TracerApi = {
 export {
   AiApi,
   PadTestsApi,
+  PadChatsApi,
   TestApi,
   CodeCacheApi,
   AlgorithmApi,

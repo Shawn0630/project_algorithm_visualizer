@@ -1,7 +1,7 @@
 import React from 'react';
 import { connect } from 'react-redux';
 import { actions } from 'reducers';
-import { AiApi, PadTestsApi } from 'apis';
+import { AiApi, PadTestsApi, PadChatsApi } from 'apis';
 import { extension, aiPadKey, AI_SESSION_DELETE_EVENT, TESTCASES_APPLY_EVENT } from 'common/util';
 import { computeHunks, applyHunks } from './diff';
 import styles from './AiAssistant.module.scss';
@@ -9,9 +9,11 @@ import styles from './AiAssistant.module.scss';
 // AI assistant panel, docked as its own workspace pane next to the
 // code pad (LeetCode-"Leet" style): the conversation fills the pane,
 // the composer sits at the bottom. Every code pad (one file of one
-// algorithm / scratch paper) owns a session; sessions are kept in
-// memory and persisted to localStorage, so each pad's conversation is
-// remembered across file switches and page reloads. On every request
+// algorithm / scratch paper) owns a session; sessions live in the
+// server's database (table pad_chats, via /api/pad-chats) with
+// localStorage as a hot cache, so each pad's conversation is
+// remembered across file switches, page reloads, browsers and
+// machines. On every request
 // the AI sees the window context (page, file list, the current editor
 // content) plus the session history.
 // A code change comes back as a PROPOSAL first - it is written to the
@@ -29,6 +31,7 @@ import styles from './AiAssistant.module.scss';
 // Testcase panel drops the cases into its list and runs them.
 const CODE_EXTS = ['js', 'java', 'py', 'cpp'];
 const STORAGE_KEY = 'av-ai-sessions-v1';
+const TS_KEY = 'av-ai-sessions-ts-v1';
 const MODEL_KEY = 'av-ai-model-v1';
 const TRACE_KEY = 'av-ai-trace-v1';
 
@@ -67,6 +70,29 @@ function loadSessions() {
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (error) {
     return {};
+  }
+}
+
+// Per-pad last-edit times of the local session copies, so the
+// load-time merge against the server store can tell which side is
+// newer (the server copy wins ties, exactly like the Testcase
+// panel's store). Sessions saved before this existed have no entry
+// and count as oldest - they still upload wherever the server has
+// no record for the pad yet.
+function loadSessionTs() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(TS_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveSessionTs(map) {
+  try {
+    window.localStorage.setItem(TS_KEY, JSON.stringify(map));
+  } catch (error) {
+    // Storage unavailable: the merge simply treats local as oldest.
   }
 }
 
@@ -182,11 +208,24 @@ class AiAssistant extends React.Component {
     this.logRef = React.createRef();
     this.testLoadedKeys = new Set();
     this.testPersistTimers = {};
+    this.chatSyncTimers = {};
+    this.sentChats = {};
+    this.chatTs = loadSessionTs();
   }
 
   componentDidUpdate(prevProps, prevState) {
     if (prevState.sessions !== this.state.sessions) {
       saveSessions(this.state.sessions);
+      // Sync the pads whose session actually changed to the
+      // database store (debounced per pad, and skipped when the
+      // content is what the server already has).
+      Object.keys(this.state.sessions).forEach(key => {
+        if (prevState.sessions[key] === this.state.sessions[key]) return;
+        if (JSON.stringify(this.state.sessions[key]) === this.sentChats[key]) return;
+        this.chatTs[key] = Date.now();
+        this.scheduleChatSync(key);
+      });
+      saveSessionTs(this.chatTs);
       if (this.logRef.current) {
         this.logRef.current.scrollTop = this.logRef.current.scrollHeight;
       }
@@ -205,6 +244,7 @@ class AiAssistant extends React.Component {
     this.handleSessionDelete = event => this.dropSession(event.detail);
     window.addEventListener(AI_SESSION_DELETE_EVENT, this.handleSessionDelete);
     this.loadModels();
+    this.hydrateChats();
   }
 
   // The model picker: the server reports which models the API key
@@ -306,14 +346,79 @@ class AiAssistant extends React.Component {
 
   componentWillUnmount() {
     window.removeEventListener(AI_SESSION_DELETE_EVENT, this.handleSessionDelete);
+    Object.values(this.chatSyncTimers).forEach(timer => window.clearTimeout(timer));
   }
 
   dropSession(key) {
-    if (!key || !(key in this.state.sessions)) return;
+    if (!key) return;
+    // The pad's chat goes with its file - on the server too, or it
+    // would come back on the next load.
+    delete this.sentChats[key];
+    if (key in this.chatTs) {
+      delete this.chatTs[key];
+      saveSessionTs(this.chatTs);
+    }
+    PadChatsApi.remove({ key }).catch(() => {});
+    if (!(key in this.state.sessions)) return;
     this.setState(prev => {
       const sessions = { ...prev.sessions };
       delete sessions[key];
       return { sessions };
+    });
+  }
+
+  // The database is the authority for sessions; localStorage is a
+  // hot cache. On load: a server record wins where it is newer than
+  // (or tied with) the local copy; pads the server does not have
+  // yet - including every session saved before this store existed -
+  // upload in the merge callback, so existing local conversations
+  // migrate up instead of being lost, and nothing uploads twice.
+  hydrateChats() {
+    PadChatsApi.list().then(({ entries }) => {
+      if (!entries) return;
+      this.setState(prev => {
+        const sessions = { ...prev.sessions };
+        Object.keys(entries).forEach(key => {
+          const server = entries[key];
+          if (!server) return;
+          if (!sessions[key] || (server.ts || 0) >= (this.chatTs[key] || 0)) {
+            sessions[key] = {
+              messages: Array.isArray(server.messages) ? server.messages : [],
+              pending: server.pending || null,
+            };
+            this.chatTs[key] = server.ts || 0;
+            this.sentChats[key] = JSON.stringify(sessions[key]);
+          }
+        });
+        saveSessionTs(this.chatTs);
+        return { sessions };
+      }, () => {
+        Object.keys(this.state.sessions).forEach(key => this.scheduleChatSync(key));
+      });
+    }).catch(() => {
+      // Server unreachable: the localStorage copies carry on alone.
+    });
+  }
+
+  scheduleChatSync(key) {
+    if (this.chatSyncTimers[key]) window.clearTimeout(this.chatSyncTimers[key]);
+    this.chatSyncTimers[key] = window.setTimeout(() => this.syncChatOut(key), 500);
+  }
+
+  syncChatOut(key) {
+    const session = this.state.sessions[key];
+    if (!session) return;
+    const json = JSON.stringify(session);
+    if (this.sentChats[key] === json) return;
+    PadChatsApi.put({ key, messages: session.messages, pending: session.pending }).then(({ record }) => {
+      this.sentChats[key] = json;
+      if (record && record.ts) {
+        this.chatTs[key] = record.ts;
+        saveSessionTs(this.chatTs);
+      }
+    }).catch(() => {
+      // Offline or server down: the local copy remains the truth
+      // until the next successful sync.
     });
   }
 

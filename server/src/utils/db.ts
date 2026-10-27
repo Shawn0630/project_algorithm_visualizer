@@ -21,6 +21,10 @@ import { createKey } from 'utils/hierarchy';
 //                  "scratch:<gistId>:<fileName>") - the category is
 //                  part of the key, so the same problem has an
 //                  independent code session in each of its categories.
+//   pad_tests      per-pad test cases + test-case generation chat,
+//                  same pad keys.
+//   pad_chats      per-pad AI assistant sessions (Code AI / Note
+//                  AI), same pad keys.
 //   meta           bookkeeping (one-time migrations).
 //
 // better-sqlite3 is loaded lazily so a missing native build produces
@@ -70,6 +74,11 @@ export function getDb(): any {
       updated_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pad_tests (
+      pad_key TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS pad_chats (
       pad_key TEXT PRIMARY KEY,
       data TEXT NOT NULL,
       updated_at INTEGER NOT NULL
@@ -434,6 +443,72 @@ export function putPadTests(key: string, patch: Partial<PadTestRecord>): PadTest
 
 export function deletePadTests(key: string): void {
   getDb().prepare('DELETE FROM pad_tests WHERE pad_key = ?').run(key);
+}
+
+// ---------- Per-pad AI assistant chats (Code AI + Note AI) ----------
+//
+// One record per code pad (same pad keys as pad_code / pad_tests):
+// the AI Assistant pane's session for that pad - the conversation
+// (messages) plus a still-pending proposal the user has not decided
+// on yet. Code AI and Note AI pads share this one store, keyed by
+// the pad exactly like the browser's session map. The test-case
+// generation chat is NOT here - it lives in the pad_tests record's
+// chat field. The browser keeps a localStorage copy as a hot cache
+// and syncs with this store, so the conversations follow the user
+// across browsers and machines, and ride along with the database
+// when it is moved (Docker volume included).
+
+export interface PadChatRecord {
+  messages: any[],
+  pending: any | null,
+  ts: number,
+}
+
+const PAD_CHAT_DEFAULTS = {messages: [] as any[], pending: null as any};
+
+export function listPadChats(): { [key: string]: PadChatRecord } {
+  const rows = getDb().prepare('SELECT pad_key, data, updated_at FROM pad_chats').all();
+  const entries: { [key: string]: PadChatRecord } = {};
+  for (const row of rows) {
+    try {
+      const parsed = JSON.parse(row.data);
+      entries[row.pad_key] = {...PAD_CHAT_DEFAULTS, ...parsed, ts: row.updated_at};
+    } catch (error) {
+      // A corrupt row is skipped rather than breaking the whole list.
+    }
+  }
+  return entries;
+}
+
+export function putPadChats(key: string, patch: Partial<Pick<PadChatRecord, 'messages' | 'pending'>>): PadChatRecord {
+  const database = getDb();
+  const row = database.prepare('SELECT data FROM pad_chats WHERE pad_key = ?').get(key);
+  let current: any = {...PAD_CHAT_DEFAULTS};
+  if (row) {
+    try {
+      current = {...PAD_CHAT_DEFAULTS, ...JSON.parse(row.data)};
+    } catch (error) {
+      // Start from defaults if the stored record is unreadable.
+    }
+  }
+  const merged = {...current};
+  if (Array.isArray(patch.messages)) merged.messages = patch.messages;
+  // pending is a real value when null (the proposal was decided or
+  // the session cleared), so presence - not truthiness - decides.
+  if (patch.pending !== undefined) merged.pending = patch.pending;
+  const ts = Date.now();
+  database.prepare('INSERT INTO pad_chats (pad_key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(pad_key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
+    .run(key, JSON.stringify(merged), ts);
+  const count = database.prepare('SELECT COUNT(*) AS count FROM pad_chats').get();
+  if (count && count.count > MAX_PAD_ENTRIES) {
+    database.prepare('DELETE FROM pad_chats WHERE pad_key IN (SELECT pad_key FROM pad_chats ORDER BY updated_at ASC LIMIT ?)')
+      .run(count.count - MAX_PAD_ENTRIES);
+  }
+  return {...merged, ts};
+}
+
+export function deletePadChats(key: string): void {
+  getDb().prepare('DELETE FROM pad_chats WHERE pad_key = ?').run(key);
 }
 
 // One-time import of the old file-based cache (server/data/
