@@ -139,12 +139,24 @@ function javaHarness(code, entry, args, className) {
   if (!new RegExp(`\\bclass\\s+${className}\\b`).test(code)) {
     throw new Error(`Visualizing a case needs a class ${className} in the Java file (the harness adds a Main that calls its entry method).`);
   }
+  // A LeetCode-style paste declares `public class Solution`, but the
+  // harness is written out as Main.java - javac refuses a public
+  // class in a wrongly-named file. Demote the entry class to
+  // package-private in the generated output (first occurrence,
+  // anchored on the class declaration, keeping any final/abstract
+  // modifiers): the generated Main accesses it via reflection in
+  // the same file, so package-private is sufficient. The pad
+  // itself is never modified.
+  const demoted = code.replace(
+    new RegExp(`\\bpublic\\s+((?:final\\s+|abstract\\s+)*)class\\s+${className}\\b`),
+    '$1class ' + className
+  );
   return `import org.algorithm_visualizer.*;
 import com.google.gson.*;
 import java.lang.reflect.*;
 import java.util.*;
 
-${code}
+${demoted}
 
 // ---- visualize this test case (auto-generated) ----
 public class Main {
