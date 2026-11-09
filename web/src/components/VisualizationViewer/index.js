@@ -1,6 +1,6 @@
 import React from 'react';
 import { connect } from 'react-redux';
-import { BaseComponent, TracerStage } from 'components';
+import { BaseComponent, GifExport, TracerStage } from 'components';
 import { actions } from 'reducers';
 import styles from './VisualizationViewer.module.scss';
 import * as TracerClasses from 'core/tracers';
@@ -80,8 +80,19 @@ class VisualizationViewer extends BaseComponent {
   constructor(props) {
     super(props);
 
-    this.state = { docFile: null, docSegments: null, closedDocs: [] };
+    this.state = { docFile: null, docSegments: null, closedDocs: [], gifExportOpen: false };
     this.reset();
+  }
+
+  // Title for the GIF bundle: the problem key, else the file
+  // being edited, else a plain fallback.
+  exportTitle() {
+    const { current } = this.props;
+    const algorithm = current && current.algorithm;
+    if (algorithm && algorithm.algorithmKey) return algorithm.algorithmKey;
+    const editing = current && current.editingFile;
+    if (editing && editing.name) return editing.name.replace(/\.[^.]+$/, '');
+    return 'visualization';
   }
 
   pageKey() {
@@ -349,6 +360,21 @@ class VisualizationViewer extends BaseComponent {
             </div>
           ) : null
         }
+        {
+          // Export lives here, beside the visualization itself -
+          // not only in the top header: it records the animation
+          // playing in this pane as a GIF + Markdown bundle.
+          !docFile ? (
+            <div className={styles.viz_toolbar}>
+              <span className={styles.viz_toolbar_spacer}/>
+              <button className={styles.export_button}
+                      disabled={!(this.props.player.chunks || []).length || this.props.player.chunks.length <= 1}
+                      onClick={() => this.setState({ gifExportOpen: true })}>
+                Export GIF
+              </button>
+            </div>
+          ) : null
+        }
         <div className={styles.viewport}>
           {
             docSegments ? (
@@ -367,6 +393,13 @@ class VisualizationViewer extends BaseComponent {
             ? <div className={styles.doc_empty}>No Markdown document on this page.</div>
             : null}
         </div>
+        {
+          this.state.gifExportOpen ? (
+            <GifExport chunks={this.props.player.chunks || []} title={this.exportTitle()}
+                       cursor={this.props.player.cursor}
+                       onClose={() => this.setState({ gifExportOpen: false })}/>
+          ) : null
+        }
       </div>
     );
   }

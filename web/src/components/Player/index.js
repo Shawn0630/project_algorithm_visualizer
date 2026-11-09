@@ -8,18 +8,12 @@ import faChevronRight from '@fortawesome/fontawesome-free-solid/faChevronRight';
 import faPause from '@fortawesome/fontawesome-free-solid/faPause';
 import faWrench from '@fortawesome/fontawesome-free-solid/faWrench';
 import { classes, extension, VISUALIZE_CASE_EVENT } from 'common/util';
+import { visualizationSnippet } from 'common/gifExport';
 import { TracerApi } from 'apis';
 import { actions } from 'reducers';
 import { BaseComponent, Button, ProgressBar } from 'components';
 import styles from './Player.module.scss';
 
-// The Markdown embed for the current visualization: a fenced
-// block holding the recorded chunks as JSON. Pasted into any
-// .md file in the app, the doc renderer plays it as an embedded
-// animation (see VisualizationViewer's splitDoc).
-export function visualizationSnippet(chunks) {
-  return '```visualization\n' + JSON.stringify({ v: 1, chunks }) + '\n```';
-}
 const errorMessage = error => {
   if (error && error.response) {
     const { data, statusText } = error.response;
