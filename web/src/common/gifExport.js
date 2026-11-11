@@ -61,6 +61,15 @@ export function sampleFrameIndexes(total, cap = MAX_GIF_FRAMES) {
   return deduped;
 }
 
+// A frame cursor is 1-based (cursor 0 is the empty stage,
+// before any command ran). Clamp an arbitrary cursor into
+// 1..total; cursor 0 reads as the final frame, matching the
+// GIF dialog's still-frame rule.
+export function clampFrameCursor(cursor, total) {
+  const n = Math.max(0, Math.floor(total) || 0);
+  return Math.max(1, Math.min(Math.floor(cursor) || n, n));
+}
+
 // A filename-safe slug: lowercase, runs of anything but
 // [a-z0-9] become one dash, trimmed. Falls back to
 // 'visualization' for empty input.

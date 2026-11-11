@@ -8,39 +8,6 @@ import * as LayoutClasses from 'core/layouts';
 import { classes, extension, VISUALIZE_CASE_EVENT } from 'common/util';
 import { TracerApi } from 'apis';
 
-// Splits a Markdown doc into segments: prose segments render
-// through the MarkdownTracer as usual, and ```visualization
-// fences (the Player's "Export for Markdown" output - a JSON
-// object holding the recorded chunks) become embedded mini
-// players. A fence whose payload does not parse stays prose, so
-// a broken embed degrades to a code block, never to a crash.
-function splitDoc(content) {
-  const segments = [];
-  const fence = /```visualization[ \t]*\n([\s\S]*?)```/g;
-  let last = 0;
-  let match = fence.exec(content);
-  const pushMd = text => {
-    if (text.trim()) segments.push({ kind: 'md', text });
-  };
-  while (match !== null) {
-    pushMd(content.slice(last, match.index));
-    let chunks = null;
-    try {
-      const parsed = JSON.parse(match[1]);
-      if (parsed && Array.isArray(parsed.chunks)) chunks = parsed.chunks;
-      else if (Array.isArray(parsed)) chunks = parsed;
-    } catch (error) {
-      chunks = null;
-    }
-    if (chunks) segments.push({ kind: 'viz', chunks });
-    else pushMd(match[0]);
-    last = match.index + match[0].length;
-    match = fence.exec(content);
-  }
-  pushMd(content.slice(last));
-  return segments.length ? segments : [{ kind: 'md', text: content }];
-}
-
 // One prose segment of a doc: rendered through the same
 // MarkdownTracer pipeline as a whole doc, as its own little
 // stage so viz embeds can sit between prose segments.
@@ -76,11 +43,44 @@ class MdSegment extends React.Component {
   }
 }
 
+// Splits a Markdown doc into segments: prose segments render
+// through the MarkdownTracer as usual, and ```visualization
+// fences (the Player's "Export for Markdown" output - a JSON
+// object holding the recorded chunks) become embedded mini
+// players. A fence whose payload does not parse stays prose, so
+// a broken embed degrades to a code block, never to a crash.
+function splitDoc(content) {
+  const segments = [];
+  const fence = /```visualization[ \t]*\n([\s\S]*?)```/g;
+  let last = 0;
+  let match = fence.exec(content);
+  const pushMd = text => {
+    if (text.trim()) segments.push({ kind: 'md', text });
+  };
+  while (match !== null) {
+    pushMd(content.slice(last, match.index));
+    let chunks = null;
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed && Array.isArray(parsed.chunks)) chunks = parsed.chunks;
+      else if (Array.isArray(parsed)) chunks = parsed;
+    } catch (error) {
+      chunks = null;
+    }
+    if (chunks) segments.push({ kind: 'viz', chunks });
+    else pushMd(match[0]);
+    last = match.index + match[0].length;
+    match = fence.exec(content);
+  }
+  pushMd(content.slice(last));
+  return segments.length ? segments : [{ kind: 'md', text: content }];
+}
+
 class VisualizationViewer extends BaseComponent {
   constructor(props) {
     super(props);
 
-    this.state = { docFile: null, docSegments: null, closedDocs: [], gifExportOpen: false };
+    this.state = { docFile: null, docSegments: null, closedDocs: [], gifExportOpen: false, frameExportOpen: false };
     this.reset();
   }
 
@@ -369,6 +369,11 @@ class VisualizationViewer extends BaseComponent {
               <span className={styles.viz_toolbar_spacer}/>
               <button className={styles.export_button}
                       disabled={!(this.props.player.chunks || []).length || this.props.player.chunks.length <= 1}
+                      onClick={() => this.setState({ frameExportOpen: true })}>
+                Export Frame
+              </button>
+              <button className={styles.export_button}
+                      disabled={!(this.props.player.chunks || []).length || this.props.player.chunks.length <= 1}
                       onClick={() => this.setState({ gifExportOpen: true })}>
                 Export GIF
               </button>
@@ -381,7 +386,8 @@ class VisualizationViewer extends BaseComponent {
               <div className={styles.doc_scroll}>
                 {
                   docSegments.map((segment, i) => segment.kind === 'viz' ? (
-                    <TracerStage key={i} chunks={segment.chunks} autoplay controls/>
+                    <TracerStage key={i}
+                                 chunks={segment.chunks} autoplay controls/>
                   ) : (
                     <MdSegment key={i} text={segment.text}/>
                   ))
@@ -398,6 +404,13 @@ class VisualizationViewer extends BaseComponent {
             <GifExport chunks={this.props.player.chunks || []} title={this.exportTitle()}
                        cursor={this.props.player.cursor}
                        onClose={() => this.setState({ gifExportOpen: false })}/>
+          ) : null
+        }
+        {
+          this.state.frameExportOpen ? (
+            <GifExport frameOnly chunks={this.props.player.chunks || []} title={this.exportTitle()}
+                       cursor={this.props.player.cursor}
+                       onClose={() => this.setState({ frameExportOpen: false })}/>
           ) : null
         }
       </div>

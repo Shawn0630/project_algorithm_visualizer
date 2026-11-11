@@ -12,6 +12,7 @@ import {
   buildNoteMarkdown,
   encodeGif,
   buildBundleZip,
+  clampFrameCursor,
   downloadBlob,
 } from 'common/gifExport';
 import styles from './GifExport.module.scss';
@@ -35,7 +36,14 @@ import styles from './GifExport.module.scss';
 //
 // Props: chunks (required), title (note title / file slug
 // source), cursor (the player's current frame, for the still
-// image), onClose.
+// image), onClose. With frameOnly, only that one frame is
+// captured — no GIF loop, no encode, no ZIP, no note .md: the
+// dialog shows the PNG preview, "Current frame (step N of
+// total)" with its embed line, and Copy frame embed + Download
+// PNG buttons. The VisualizationViewer toolbar's Export Frame
+// uses this mode for the code visualization at the player's
+// current cursor. The frame is fixed at the moment the dialog
+// opens; to change frame, close and reopen at the new step.
 function waitPaint() {
   return new Promise(resolve => {
     window.requestAnimationFrame(() => {
@@ -98,7 +106,30 @@ class GifExport extends BaseComponent {
     return toCanvas(node, { pixelRatio: scale });
   }
 
+  // Capture one frame as a PNG (blob + bytes + file name).
+  // Shared by the GIF flow (the still frame first) and
+  // frame-only mode. Returns null when the dialog was
+  // cancelled mid-capture.
+  async captureStill(frameCursor) {
+    const frameCanvas = await this.captureFrame(frameCursor);
+    if (this.cancelled) return null;
+    const pngBlob = await new Promise((resolve, reject) => {
+      frameCanvas.toBlob(
+        blob => (blob ? resolve(blob) : reject(new Error('PNG encode failed.'))),
+        'image/png',
+      );
+    });
+    if (this.cancelled) return null;
+    const pngBytes = new Uint8Array(await pngBlob.arrayBuffer());
+    const slug = sanitizeFileName(this.props.title);
+    const pngName = framePngName(slug, frameCursor);
+    this.pngBlob = pngBlob;
+    this.pngBlobUrl = URL.createObjectURL(pngBlob);
+    return { pngUrl: this.pngBlobUrl, pngBytes: pngBytes.length, pngName, frameCursor };
+  }
+
   async record() {
+    if (this.props.frameOnly) return this.recordFrameOnly();
     const { chunks, title, cursor } = this.props;
     const total = (chunks || []).length;
     const indexes = sampleFrameIndexes(total, MAX_GIF_FRAMES);
@@ -108,22 +139,11 @@ class GifExport extends BaseComponent {
       // on when the dialog opened (clamped to 1..total; cursor 0
       // is the empty stage). One rasterize, same pipeline as a
       // GIF frame, encoded as PNG.
-      const frameCursor = Math.max(1, Math.min(cursor || total, total));
-      const frameCanvas = await this.captureFrame(frameCursor);
-      if (this.cancelled) return;
-      const pngBlob = await new Promise((resolve, reject) => {
-        frameCanvas.toBlob(
-          blob => (blob ? resolve(blob) : reject(new Error('PNG encode failed.'))),
-          'image/png',
-        );
-      });
-      if (this.cancelled) return;
-      const pngBytes = new Uint8Array(await pngBlob.arrayBuffer());
-      const slug = sanitizeFileName(title);
-      const pngName = framePngName(slug, frameCursor);
-      this.pngBlob = pngBlob;
-      this.pngBlobUrl = URL.createObjectURL(pngBlob);
-      this.setState({ pngUrl: this.pngBlobUrl, pngBytes: pngBytes.length, pngName, frameCursor });
+      const frameCursor = clampFrameCursor(cursor, total);
+      const still = await this.captureStill(frameCursor);
+      if (this.cancelled || !still) return;
+      const { pngName, pngBytes } = still;
+      this.setState({ pngUrl: still.pngUrl, pngBytes, pngName, frameCursor });
       const frames = [];
       for (let k = 0; k < indexes.length; k += 1) {
         if (this.cancelled) return;
@@ -137,6 +157,7 @@ class GifExport extends BaseComponent {
       }
       if (this.cancelled) return;
       const gifBytes = encodeGif(frames, GIF_FRAME_MS);
+      const slug = sanitizeFileName(title);
       const gifName = `${slug}.gif`;
       const mdName = `${slug}.md`;
       const mdText = buildNoteMarkdown({ title, gifName, pngName, frameCursor, chunks });
@@ -161,6 +182,33 @@ class GifExport extends BaseComponent {
         mdText,
         mdName,
         gifName,
+      });
+    } catch (error) {
+      if (!this.cancelled) {
+        this.setState({ phase: 'error', error: (error && error.message) || 'Recording failed.' });
+      }
+    }
+  }
+
+  // Frame-only mode: capture just the frame at props.cursor —
+  // no GIF loop, no encode, no ZIP, no note .md. The dialog shows
+  // the PNG preview, "Current frame (step N of total)" with its
+  // embed line, and Copy frame embed + Download PNG buttons.
+  async recordFrameOnly() {
+    const { chunks, cursor } = this.props;
+    const total = (chunks || []).length;
+    this.setState({ totalFrames: 1 });
+    try {
+      if (!total) throw new Error('No visualization frames to export.');
+      const frameCursor = clampFrameCursor(cursor, total);
+      const still = await this.captureStill(frameCursor);
+      if (this.cancelled || !still) return;
+      this.setState({
+        phase: 'done',
+        pngUrl: still.pngUrl,
+        pngBytes: still.pngBytes,
+        pngName: still.pngName,
+        frameCursor: still.frameCursor,
       });
     } catch (error) {
       if (!this.cancelled) {
@@ -222,20 +270,26 @@ class GifExport extends BaseComponent {
   }
 
   render() {
-    const { chunks, title, onClose } = this.props;
+    const { chunks, title, onClose, frameOnly } = this.props;
     const { phase, frame, totalFrames, gifUrl, gifBytes, frameCount,
       pngUrl, pngBytes, pngName, frameCursor, mdText, error, copied, pngCopied } = this.state;
     const slug = sanitizeFileName(title);
     return (
       <div className={styles.overlay} onClick={onClose}>
         <div className={styles.box} onClick={e => e.stopPropagation()}>
-          <div className={styles.title}>Export animation as GIF + frame image + Markdown bundle</div>
+          <div className={styles.title}>
+            {frameOnly ? 'Export current frame as PNG' : 'Export animation as GIF + frame image + Markdown bundle'}
+          </div>
           {
             phase === 'recording' ? (
               <div>
                 <div className={styles.hint}>
-                  Recording frame {frame} / {totalFrames} — the animation is replayed offscreen,
-                  one frame per step. This can take a while for long animations.
+                  {frameOnly ? 'Capturing the current frame…' : (
+                    <span>
+                      Recording frame {frame} / {totalFrames} — the animation is replayed offscreen,
+                      one frame per step. This can take a while for long animations.
+                    </span>
+                  )}
                 </div>
                 <div className={styles.progress}>
                   <div className={styles.progress_bar}
@@ -246,9 +300,21 @@ class GifExport extends BaseComponent {
               <div>
                 <div className={styles.error}>Recording failed: {error}</div>
                 <div className={styles.hint}>
-                  The GIF capture needs the visualization to render in the browser.
-                  The header Export MD button still works for the in-app embed.
+                  {frameOnly ? 'The frame capture needs the visualization to render in the browser.' : (
+                    <span>
+                      The GIF capture needs the visualization to render in the browser.
+                      The header Export MD button still works for the in-app embed.
+                    </span>
+                  )}
                 </div>
+              </div>
+            ) : frameOnly ? (
+              <div>
+                <div className={styles.hint}>
+                  Current frame (step {frameCursor} of {(chunks || []).length}) · {(pngBytes / 1024).toFixed(0)} KB PNG.
+                  Embed it with: <code>{this.frameEmbedLine()}</code>
+                </div>
+                {pngUrl ? <img className={styles.preview} src={pngUrl} alt={`Frame ${frameCursor}`}/> : null}
               </div>
             ) : (
               <div>
@@ -276,32 +342,55 @@ class GifExport extends BaseComponent {
           }
           <div className={styles.row}>
             {
-              phase === 'done' && pngUrl ? (
-                <button className={styles.button} onClick={() => this.copyFrameEmbed()}>
-                  {pngCopied ? '✓ Frame embed copied' : 'Copy frame embed'}
-                </button>
-              ) : null
-            }
-            {
-              phase === 'done' && pngUrl ? (
-                <button className={styles.button} onClick={() => this.downloadPng()}>
-                  Download PNG
-                </button>
-              ) : null
-            }
-            {
-              phase === 'done' ? (
-                <button className={styles.button} onClick={() => this.copySnippet()}>
-                  {copied ? '✓ Copied' : 'Copy Markdown'}
-                </button>
-              ) : null
-            }
-            {
-              phase === 'done' ? (
-                <button className={styles.button} onClick={() => this.downloadZip()}>
-                  Download .zip
-                </button>
-              ) : null
+              frameOnly ? (
+                <React.Fragment>
+                  {
+                    phase === 'done' && pngUrl ? (
+                      <button className={styles.button} onClick={() => this.copyFrameEmbed()}>
+                        {pngCopied ? '✓ Frame embed copied' : 'Copy frame embed'}
+                      </button>
+                    ) : null
+                  }
+                  {
+                    phase === 'done' && pngUrl ? (
+                      <button className={styles.button} onClick={() => this.downloadPng()}>
+                        Download PNG
+                      </button>
+                    ) : null
+                  }
+                </React.Fragment>
+              ) : (
+                <React.Fragment>
+                  {
+                    phase === 'done' && pngUrl ? (
+                      <button className={styles.button} onClick={() => this.copyFrameEmbed()}>
+                        {pngCopied ? '✓ Frame embed copied' : 'Copy frame embed'}
+                      </button>
+                    ) : null
+                  }
+                  {
+                    phase === 'done' && pngUrl ? (
+                      <button className={styles.button} onClick={() => this.downloadPng()}>
+                        Download PNG
+                      </button>
+                    ) : null
+                  }
+                  {
+                    phase === 'done' ? (
+                      <button className={styles.button} onClick={() => this.copySnippet()}>
+                        {copied ? '✓ Copied' : 'Copy Markdown'}
+                      </button>
+                    ) : null
+                  }
+                  {
+                    phase === 'done' ? (
+                      <button className={styles.button} onClick={() => this.downloadZip()}>
+                        Download .zip
+                      </button>
+                    ) : null
+                  }
+                </React.Fragment>
+              )
             }
             <button className={styles.button} onClick={onClose}>
               {phase === 'recording' ? 'Cancel' : 'Close'}

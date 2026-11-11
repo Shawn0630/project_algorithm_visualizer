@@ -7,6 +7,7 @@ import faEyeSlash from '@fortawesome/fontawesome-free-solid/faEyeSlash';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { classes, extension, notifyAiSessionDeleted, LAYOUT_CHANGED_EVENT } from 'common/util';
 import { hasLocalCopy, originalContent } from 'common/savedCode';
+import { downloadBlob } from 'common/gifExport';
 import { tracerFoldEnabled, setTracerFoldEnabled } from 'common/tracerFold';
 import { actions } from 'reducers';
 import { connect } from 'react-redux';
@@ -20,7 +21,10 @@ class CodeEditor extends React.Component {
 
     this.aceEditorRef = React.createRef();
     this.rootRef = React.createRef();
-    this.state = { armedLang: null, hideTracers: tracerFoldEnabled() };
+    this.state = {
+      armedLang: null,
+      hideTracers: tracerFoldEnabled(),
+    };
     this.armTimeout = null;
   }
 
@@ -118,6 +122,18 @@ class CodeEditor extends React.Component {
       notifyAiSessionDeleted(this.props.current, editingFile.name);
     }
     this.props.replaceFile(editingFile, name, language.skeleton.content);
+  }
+
+  // Export Markdown: download the note file itself as a .md
+  // file. The header's Export MD exports the ```visualization
+  // snippet, not the note — until now there was no way to get
+  // the .md file out of the app. Non-destructive, so no confirm.
+  exportMarkdown() {
+    const { editingFile } = this.props.current;
+    downloadBlob(
+      new Blob([editingFile.content || ''], { type: 'text/markdown' }),
+      editingFile.name,
+    );
   }
 
   render() {
@@ -236,6 +252,15 @@ class CodeEditor extends React.Component {
           }
           <div className={styles.empty}>
             <div className={styles.empty}/>
+            {
+              fileExt === 'md' ? (
+                <Button className={styles.export_markdown} primary
+                        title="Download this note as a .md file"
+                        onClick={() => this.exportMarkdown()}>
+                  <Ellipsis>Export Markdown</Ellipsis>
+                </Button>
+              ) : null
+            }
             <Button className={styles.delete} icon={faTrashAlt} primary confirmNeeded
                     onClick={() => {
                       notifyAiSessionDeleted(this.props.current, editingFile.name);

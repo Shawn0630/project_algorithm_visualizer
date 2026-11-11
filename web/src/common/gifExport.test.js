@@ -11,6 +11,7 @@ import {
   encodeGif,
   normalizeGifFrames,
   buildBundleZip,
+  clampFrameCursor,
 } from './gifExport';
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -76,6 +77,22 @@ describe('sampleFrameIndexes', () => {
 
   it('uses the 550 ms frame pace', () => {
     expect(GIF_FRAME_MS).toBe(550);
+  });
+});
+
+describe('clampFrameCursor', () => {
+  it('keeps a cursor inside 1..total and reads cursor 0 as the final frame', () => {
+    expect(clampFrameCursor(3, 18)).toBe(3);
+    expect(clampFrameCursor(1, 18)).toBe(1);
+    expect(clampFrameCursor(18, 18)).toBe(18);
+    expect(clampFrameCursor(0, 18)).toBe(18);
+    expect(clampFrameCursor(99, 18)).toBe(18);
+    expect(clampFrameCursor(-2, 18)).toBe(1);
+  });
+
+  it('falls back to 1 when there are no frames', () => {
+    expect(clampFrameCursor(3, 0)).toBe(1);
+    expect(clampFrameCursor(0, 0)).toBe(1);
   });
 });
 
