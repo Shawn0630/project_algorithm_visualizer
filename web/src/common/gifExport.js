@@ -103,22 +103,59 @@ export function buildNoteMarkdown({ title, gifName, pngName, frameCursor, chunks
   return lines.join('\n');
 }
 
+// Pad RGBA frames to one shared size — the largest width and
+// height across the list — so they encode as a single GIF.
+// Content stays anchored top-left; the padding takes the frame's
+// own background colour, sampled from its (0,0) pixel (opaque
+// black when that pixel is fully transparent). Frames already
+// at the target size pass through unchanged. This is what the
+// capture stage needs: its container has a fixed width but its
+// height follows the content at each step, so frames come back
+// at different heights.
+export function normalizeGifFrames(frames) {
+  const list = frames || [];
+  let width = 0;
+  let height = 0;
+  for (const f of list) {
+    width = Math.max(width, f.width || 0);
+    height = Math.max(height, f.height || 0);
+  }
+  return list.map(frame => {
+    if (frame.width === width && frame.height === height) return frame;
+    const src = frame.data || [];
+    const bg = [src[0] || 0, src[1] || 0, src[2] || 0, src[3] || 0];
+    const fill = bg[3] === 0 ? [0, 0, 0, 255] : bg;
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < width * height; i += 1) {
+      data[i * 4] = fill[0];
+      data[i * 4 + 1] = fill[1];
+      data[i * 4 + 2] = fill[2];
+      data[i * 4 + 3] = fill[3];
+    }
+    for (let y = 0; y < frame.height; y += 1) {
+      const srcRow = y * frame.width * 4;
+      const dstRow = y * width * 4;
+      data.set(src.subarray(srcRow, srcRow + frame.width * 4), dstRow);
+    }
+    return { data, width, height };
+  });
+}
+
 // Encode RGBA frames into an animated GIF. frames are
-// { data: Uint8Array|Uint8ClampedArray (RGBA), width, height };
-// all frames must share one size. delayMs is the per-frame
-// delay; the GIF loops forever.
+// { data: Uint8Array|Uint8ClampedArray (RGBA), width, height }.
+// Frames of different sizes are padded to the largest size
+// (see normalizeGifFrames) instead of failing; delayMs is the
+// per-frame delay; the GIF loops forever.
 export function encodeGif(frames, delayMs = GIF_FRAME_MS) {
   const list = frames || [];
   if (!list.length) throw new Error('No frames to encode.');
-  const { width, height } = list[0];
-  if (!width || !height) throw new Error('Frames need a width and height.');
   for (const f of list) {
-    if (f.width !== width || f.height !== height) {
-      throw new Error('All GIF frames must share one size.');
-    }
+    if (!f.width || !f.height) throw new Error('Frames need a width and height.');
   }
+  const normalized = normalizeGifFrames(list);
+  const { width, height } = normalized[0];
   const encoder = GIFEncoder();
-  list.forEach((frame, i) => {
+  normalized.forEach((frame, i) => {
     const palette = quantize(frame.data, 256);
     const index = applyPalette(frame.data, palette);
     encoder.writeFrame(index, width, height, {

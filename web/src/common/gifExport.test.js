@@ -9,6 +9,7 @@ import {
   imageEmbed,
   buildNoteMarkdown,
   encodeGif,
+  normalizeGifFrames,
   buildBundleZip,
 } from './gifExport';
 
@@ -157,9 +158,88 @@ describe('encodeGif', () => {
     expect(encodeGif(frames)).toEqual(encodeGif(frames));
   });
 
-  it('rejects empty frames and mismatched sizes', () => {
+  it('rejects an empty frame list and frames without a size', () => {
     expect(() => encodeGif([])).toThrow('No frames');
-    expect(() => encodeGif([rgbaFrame(4, 4, 0, 0, 0), rgbaFrame(8, 8, 0, 0, 0)])).toThrow('one size');
+    expect(() => encodeGif([{ data: new Uint8Array(0) }])).toThrow('width and height');
+    expect(() => encodeGif([rgbaFrame(4, 4, 0, 0, 0), { data: new Uint8Array(0) }]))
+      .toThrow('width and height');
+  });
+
+  it('encodes mixed-size frames instead of throwing', () => {
+    const bytes = encodeGif([rgbaFrame(4, 4, 255, 0, 0), rgbaFrame(8, 6, 0, 0, 255)]);
+    expect(gifHeader(bytes)).toBe('GIF89a');
+    expect(bytes[bytes.length - 1]).toBe(0x3b);
+    expect(bytes.length).toBeGreaterThan(0);
+  });
+
+  it('sizes the GIF to the largest frame', () => {
+    const bytes = encodeGif([
+      rgbaFrame(4, 4, 255, 0, 0),
+      rgbaFrame(8, 6, 0, 0, 255),
+      rgbaFrame(2, 10, 0, 255, 0),
+    ]);
+    // Logical screen size: bytes 6-7 width, 8-9 height, little-endian.
+    const width = bytes[6] | (bytes[7] << 8);
+    const height = bytes[8] | (bytes[9] << 8);
+    expect(width).toBe(8);
+    expect(height).toBe(10);
+  });
+});
+
+describe('normalizeGifFrames', () => {
+  // A frame built from explicit pixels: map "x,y" -> [r, g, b, a].
+  // Unlisted pixels start as transparent black.
+  function pixelFrame(width, height, pixels) {
+    const data = new Uint8ClampedArray(width * height * 4);
+    Object.entries(pixels).forEach(([key, [r, g, b, a]]) => {
+      const [x, y] = key.split(',').map(Number);
+      const i = (y * width + x) * 4;
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+      data[i + 3] = a;
+    });
+    return { data, width, height };
+  }
+
+  function pixelAt(frame, x, y) {
+    const i = (y * frame.width + x) * 4;
+    return Array.from(frame.data.subarray(i, i + 4));
+  }
+
+  it('pads smaller frames to the max size, content anchored top-left', () => {
+    const small = pixelFrame(2, 2, { '0,0': [255, 0, 0, 255], '1,1': [0, 255, 0, 255] });
+    const big = pixelFrame(4, 3, { '0,0': [0, 0, 255, 255] });
+    const [outSmall, outBig] = normalizeGifFrames([small, big]);
+    expect(outSmall.width).toBe(4);
+    expect(outSmall.height).toBe(3);
+    // The distinctly-coloured (0,0) pixel survives at the top-left.
+    expect(pixelAt(outSmall, 0, 0)).toEqual([255, 0, 0, 255]);
+    // The (1,1) pixel survives in place.
+    expect(pixelAt(outSmall, 1, 1)).toEqual([0, 255, 0, 255]);
+    // Padding below/right is the frame's own background (its (0,0) red).
+    expect(pixelAt(outSmall, 3, 0)).toEqual([255, 0, 0, 255]);
+    expect(pixelAt(outSmall, 0, 2)).toEqual([255, 0, 0, 255]);
+    expect(pixelAt(outSmall, 3, 2)).toEqual([255, 0, 0, 255]);
+    // A frame already at the target size passes through unchanged.
+    expect(outBig).toBe(big);
+  });
+
+  it('fills padding with opaque black when the (0,0) pixel is transparent', () => {
+    const small = pixelFrame(2, 2, { '1,0': [0, 255, 0, 255] });
+    const big = pixelFrame(4, 4, { '0,0': [0, 0, 255, 255] });
+    const [outSmall] = normalizeGifFrames([small, big]);
+    expect(outSmall.width).toBe(4);
+    expect(outSmall.height).toBe(4);
+    expect(pixelAt(outSmall, 0, 0)).toEqual([0, 0, 0, 0]);
+    expect(pixelAt(outSmall, 1, 0)).toEqual([0, 255, 0, 255]);
+    expect(pixelAt(outSmall, 3, 3)).toEqual([0, 0, 0, 255]);
+  });
+
+  it('leaves same-size frames untouched', () => {
+    const a = rgbaFrame(4, 4, 9, 9, 9);
+    const b = rgbaFrame(4, 4, 1, 2, 3);
+    expect(normalizeGifFrames([a, b])).toEqual([a, b]);
   });
 });
 
