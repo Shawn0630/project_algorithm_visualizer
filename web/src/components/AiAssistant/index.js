@@ -300,16 +300,16 @@ class AiAssistant extends React.Component {
     return (
       <details className={styles.trace}>
         <summary>
-          过程 · {trace.model || 'unknown model'}{trace.usedFallback ? ' (fallback)' : ''}
+          过程 · {trace.model || '未知模型'}{trace.usedFallback ? '（备用模型）' : ''}
           {typeof trace.durationMs === 'number' ? ` · ${(trace.durationMs / 1000).toFixed(1)}s` : ''}
-          {typeof trace.attempts === 'number' ? ` · ${trace.attempts} attempt(s)${trace.retries ? ` · ${trace.retries} retries` : ''}` : ''}
+          {typeof trace.attempts === 'number' ? ` · ${trace.attempts} 次尝试${trace.retries ? ` · ${trace.retries} 次重试` : ''}` : ''}
         </summary>
         <div className={styles.trace_steps}>
           {
             steps.map((step, i) => (
               <div key={i} className={styles.trace_step}>
                 <span className={styles.trace_step_name}>{marks[step.status] || '·'} {step.name}</span>
-                {typeof step.attempts === 'number' ? <span className={styles.trace_step_meta}>{step.attempts} attempt(s)</span> : null}
+                {typeof step.attempts === 'number' ? <span className={styles.trace_step_meta}>{step.attempts} 次尝试</span> : null}
                 {typeof step.durationMs === 'number' ? <span className={styles.trace_step_meta}>{step.durationMs}ms</span> : null}
                 {step.detail ? <div className={styles.trace_detail}>{step.detail}</div> : null}
               </div>
@@ -319,11 +319,11 @@ class AiAssistant extends React.Component {
         {
           Array.isArray(trace.messages) && trace.messages.length ? (
             <details className={styles.trace_sub}>
-              <summary>Prompt sent to the model ({trace.messages.length} messages)</summary>
+              <summary>发送给模型的提示词（{trace.messages.length} 条消息）</summary>
               {
                 trace.messages.map((message, i) => (
                   <div key={i} className={styles.trace_msg}>
-                    <div className={styles.trace_role}>{message.role}</div>
+                    <div className={styles.trace_role}>{{user: '用户', system: '系统', model: '模型', assistant: '模型'}[message.role] || message.role}</div>
                     <pre className={styles.code}>{typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 1)}</pre>
                   </div>
                 ))
@@ -334,12 +334,12 @@ class AiAssistant extends React.Component {
         {
           trace.rawResponse ? (
             <details className={styles.trace_sub}>
-              <summary>Raw model response</summary>
+              <summary>模型原始回复</summary>
               <pre className={styles.code}>{trace.rawResponse}</pre>
             </details>
           ) : null
         }
-        {trace.slimmed ? <div className={styles.trace_detail}>(Older reply - its prompt and raw response were dropped to save storage space; the steps above are complete.)</div> : null}
+        {trace.slimmed ? <div className={styles.trace_detail}>（较早的回复——为节省存储空间，其提示词与原始回复已被删除；上方步骤完整。）</div> : null}
       </details>
     );
   }
@@ -762,7 +762,7 @@ class AiAssistant extends React.Component {
                   message.cases ? (
                     <div className={styles.test_card}>
                       <div className={styles.test_card_title}>
-                        {message.cases.length} test case(s) - {message.mode === 'replace' ? 'replaces the panel list' : 'adds to the panel list'}
+                        {message.cases.length} 个测试用例 - {message.mode === 'replace' ? '替换面板列表' : '添加到面板列表'}
                       </div>
                       {
                         message.cases.map((tc, j) => (
@@ -863,12 +863,12 @@ class AiAssistant extends React.Component {
         {
           pending.syntax ? (
             pending.syntax.ok ? (
-              <div className={styles.syntax_ok}>✓ Syntax check passed</div>
+              <div className={styles.syntax_ok}>✓ 语法检查通过</div>
             ) : (
               <div className={styles.syntax_bad}>
-                <div>⚠ Syntax check failed - review before applying, or let the AI fix it:</div>
+                <div>⚠ 语法检查未通过——应用前请检查，或让 AI 修复：</div>
                 <pre className={styles.code}>{pending.syntax.error}</pre>
-                <button className={styles.chip} onClick={() => this.sendFixSyntax()}>Fix this with AI</button>
+                <button className={styles.chip} onClick={() => this.sendFixSyntax()}>用 AI 修复</button>
               </div>
             )
           ) : null
@@ -981,7 +981,7 @@ class AiAssistant extends React.Component {
             <input type="checkbox" checked={this.state.showTrace} onChange={() => this.toggleTrace()}/>
             显示 AI 过程
           </label>
-          <span className={styles.trace_toggle_hint}>model, prompt, raw reply and pipeline steps under each reply</span>
+          <span className={styles.trace_toggle_hint}>每条回复下方显示模型、提示词、原始回复与流程步骤</span>
         </div>
         <div className={styles.tab_row}>
           {

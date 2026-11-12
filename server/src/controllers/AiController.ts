@@ -320,11 +320,11 @@ export async function callLlm(messages: object[], requestedModel: string | null)
     const data = error && error.response && error.response.data;
     const upstream = (data && data.error && data.error.message)
       || (data && typeof data.message === 'string' && data.message)
-      || (status === 503 ? 'the provider reports the model is overloaded (503, high demand)' : null);
+      || (status === 503 ? '服务方报告模型过载（503，需求过高）' : null);
     const hint = status === 404
-      ? ` - model "${usedModel}" was not found (404): the id is wrong or unavailable to this API key; Admin -> AI Call Log -> "List models my key can use" shows the exact ids`
+      ? `——模型 "${usedModel}" 未找到（404）：id 错误或该 API key 无权使用；管理后台 → AI 调用记录 → "列出我的 key 可用的模型" 可查看准确的 id`
       : '';
-    const wrapped: any = new Error(`LLM call failed: ${upstream || (error && error.message) || 'unknown error'}${hint}${totalAttempts > 1 ? ` (after ${totalAttempts} attempts)` : ''}`);
+    const wrapped: any = new Error(`调用模型失败：${upstream || (error && error.message) || '未知错误'}${hint}${totalAttempts > 1 ? `（已尝试 ${totalAttempts} 次）` : ''}`);
     wrapped.status = (error && error.status) || 502;
     wrapped.totalAttempts = totalAttempts;
     wrapped.usedModel = usedModel;
@@ -618,27 +618,27 @@ export class AiController extends Controller {  constructor(server: Server) {
       { role: 'user', content: instruction.trim().slice(0, 8000) },
     ];
     const traceSteps: AiTraceStep[] = [{
-      name: 'Build prompt',
+      name: '组织提示词',
       status: 'ok',
-      detail: `test-case chat: system prompt + pad context (${Array.isArray(currentCases) ? currentCases.length : 0} current cases) + ${turns.length} history turn(s), language ${String(language || 'js')}`,
+      detail: `测试用例对话：系统提示词 + 题目上下文（${Array.isArray(currentCases) ? currentCases.length : 0} 个当前用例）+ ${turns.length} 轮历史，语言 ${String(language || 'js')}`,
     }];
     try {
       sentMessages = messages;
       const { content, usedModel, totalAttempts } = await callLlm(messages, requestedModel);
       const primaryForTrace = requestedModel || process.env.LLM_MODEL || null;
       traceSteps.push({
-        name: 'LLM call',
+        name: '调用模型',
         status: 'ok',
         attempts: totalAttempts,
-        detail: `model ${usedModel}${usedModel !== primaryForTrace ? ` (fallback - primary was ${primaryForTrace})` : ''}${totalAttempts > 1 ? `, ${totalAttempts - 1} retries inside the call` : ''} - ${content.length} chars returned`,
+        detail: `模型 ${usedModel}${usedModel !== primaryForTrace ? `（备用模型，主模型是 ${primaryForTrace}）` : ''}${totalAttempts > 1 ? `，调用内重试 ${totalAttempts - 1} 次` : ''}，返回 ${content.length} 字符`,
       });
       const parsed = parseTestChatReply(content);
       traceSteps.push({
-        name: 'Parse reply',
+        name: '解析回复',
         status: parsed ? 'ok' : 'triggered',
         detail: parsed
-          ? (parsed.cases ? `${parsed.cases.length} case(s), mode ${parsed.mode}` : 'message only, no case change')
-          : 'reply was not the expected JSON - delivered as a plain message with no case change',
+          ? (parsed.cases ? `${parsed.cases.length} 个用例，模式 ${parsed.mode}` : '仅消息，用例无变化')
+          : '回复不是预期的 JSON——作为纯消息返回，用例无变化',
       });
       const reply = parsed || { message: stripFence(content).trim() || '(empty reply)', entry: '', mode: 'append' as const, cases: null };
       const finalEntry = reply.entry || (typeof entry === 'string' ? entry.trim() : '');
@@ -817,7 +817,7 @@ export class AiController extends Controller {  constructor(server: Server) {
           status: 'ok',
           attempts: totalAttempts - attemptsBefore,
           durationMs: Date.now() - roundStartedAt,
-          detail: `model ${modelName}${totalAttempts - attemptsBefore > 1 ? ` (${totalAttempts - attemptsBefore - 1} internal retries)` : ''}${result === null ? ' - empty/unrecognized response' : ` - ${result.length} chars returned`}`,
+          detail: `模型 ${modelName}${totalAttempts - attemptsBefore > 1 ? `（内部重试 ${totalAttempts - attemptsBefore - 1} 次）` : ''}${result === null ? '——空回复或无法识别的回复' : `，返回 ${result.length} 字符`}`,
         });
         return result;
       } catch (error) {
@@ -852,9 +852,9 @@ export class AiController extends Controller {  constructor(server: Server) {
         {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`},
       ];
       traceSteps.push({
-        name: 'Build prompt',
+        name: '组织提示词',
         status: 'ok',
-        detail: `${messages.length} messages (system prompt${contextNote ? ' + window context' : ''}${readmeNote ? ' + page document' : ''} + ${turns.length} history turn(s) + user turn), language ${String(language || 'js')}${isMarkdown ? ', markdown-note mode (code guards skipped)' : ''}`,
+        detail: `${messages.length} 条消息（系统提示词${contextNote ? ' + 窗口上下文' : ''}${readmeNote ? ' + 页面文档' : ''} + ${turns.length} 轮历史 + 用户提问），语言 ${String(language || 'js')}${isMarkdown ? '，markdown 笔记模式（跳过代码检查）' : ''}`,
       });
       // Primary model first; if it stays overloaded / unreachable
       // through its whole retry chain and a fallback model is
@@ -863,17 +863,17 @@ export class AiController extends Controller {  constructor(server: Server) {
       const fallbackModel = process.env.LLM_MODEL_FALLBACK;
       let content: string | null;
       try {
-        content = await callTraced('LLM call (primary)', messages, primaryModel!);
+        content = await callTraced('调用模型（主模型）', messages, primaryModel!);
       } catch (error) {
         if (fallbackModel && fallbackModel !== primaryModel && isRetryableFailure(error)) {
           fallbackUsed = true;
           usedModel = fallbackModel;
           traceSteps.push({
-            name: 'Fallback model',
+            name: '备用模型',
             status: 'triggered',
-            detail: `primary model ${primaryModel} failed with a retryable error - switching to LLM_MODEL_FALLBACK ${fallbackModel}`,
+            detail: `主模型 ${primaryModel} 遇到可重试错误——切换到 LLM_MODEL_FALLBACK ${fallbackModel}`,
           });
-          content = await callTraced('LLM call (fallback)', messages, fallbackModel);
+          content = await callTraced('调用模型（备用模型）', messages, fallbackModel);
         } else {
           throw error;
         }
@@ -884,9 +884,9 @@ export class AiController extends Controller {  constructor(server: Server) {
       }
       let reply = parseReply(content);
       traceSteps.push({
-        name: 'Parse reply',
+        name: '解析回复',
         status: 'ok',
-        detail: `code ${reply.code.length} chars, explanation ${reply.explanation.length} chars${reply.testCases ? `, ${reply.testCases.length} test case(s)` : ''}`,
+        detail: `代码 ${reply.code.length} 字符，解释 ${reply.explanation.length} 字符${reply.testCases ? `，${reply.testCases.length} 个测试用例` : ''}`,
       });
       // Completeness enforcement: if the reply looks elided (the diff
       // UI would treat missing regions as deletions), demand the full
@@ -897,7 +897,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       const elisionTriggered = partialSuspected;
       if (partialSuspected) {
         elidedFirstAttempt = content;
-        const retryContent = await callTraced('LLM call (completeness repair)', [
+        const retryContent = await callTraced('调用模型（完整性修复）', [
           ...messages,
           {role: 'assistant', content},
           {
@@ -913,10 +913,10 @@ export class AiController extends Controller {  constructor(server: Server) {
         }
       }
       traceSteps.push(isMarkdown
-        ? {name: 'Completeness (elision) check', status: 'skipped', detail: 'markdown-note mode - prose is not elision-checked'}
+        ? {name: '完整性（省略）检查', status: 'skipped', detail: 'markdown 笔记模式——正文不做省略检查'}
         : elisionTriggered
-          ? {name: 'Completeness (elision) check', status: 'triggered', detail: `first reply looked elided - one completeness repair round sent; resent reply ${partialSuspected ? 'STILL looks elided (flagged as partial)' : 'passed the check'}`}
-          : {name: 'Completeness (elision) check', status: 'ok', detail: 'reply is not elided'});
+          ? {name: '完整性（省略）检查', status: 'triggered', detail: `首次回复疑似省略——已发送一轮完整性修复；重发后${partialSuspected ? '仍疑似省略（已标记为不完整）' : '已通过检查'}`}
+          : {name: '完整性（省略）检查', status: 'ok', detail: '回复没有省略'});
       let changed = reply.code !== code;
       // Hallucinated-library guard: if the proposal imports or
       // calls a visualization API that does not exist in this app
@@ -927,7 +927,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       let hallucinatedLib = changed && !isMarkdown ? findHallucinatedLib(reply.code) : null;
       const hallucinationTriggered = hallucinatedLib;
       if (hallucinatedLib) {
-        const retryContent = await callTraced('LLM call (library-guard repair)', [
+        const retryContent = await callTraced('调用模型（虚构库名修复）', [
           ...messages,
           {role: 'assistant', content},
           {
@@ -949,10 +949,10 @@ export class AiController extends Controller {  constructor(server: Server) {
         }
       }
       traceSteps.push(isMarkdown
-        ? {name: 'Hallucinated-library guard', status: 'skipped', detail: 'markdown-note mode'}
+        ? {name: '虚构库名检查', status: 'skipped', detail: 'markdown 笔记模式'}
         : hallucinationTriggered
-          ? {name: 'Hallucinated-library guard', status: 'triggered', detail: `reply used ${hallucinationTriggered} - one repair round sent; ${hallucinatedLib ? `STILL present (${hallucinatedLib}) - warning attached to the reply` : 'rewritten reply is clean'}`}
-          : {name: 'Hallucinated-library guard', status: 'ok', detail: 'no invented library or method usage found'});
+          ? {name: '虚构库名检查', status: 'triggered', detail: `回复用到了 ${hallucinationTriggered}——已发送一轮修复；${hallucinatedLib ? `仍存在（${hallucinatedLib}），回复已附警告` : '重写后的回复没有问题'}`}
+          : {name: '虚构库名检查', status: 'ok', detail: '未发现虚构的库或方法'});
       // Static API-surface validation: the tracer reference is in
       // the prompt, yet models still misuse it in ways that
       // compile and run - Array2DTracer's 4-argument select on an
@@ -971,7 +971,7 @@ export class AiController extends Controller {  constructor(server: Server) {
         let violations = await validateApiUsage(dryRunLanguage, reply.code);
         apiFirstViolations = violations.slice();
         if (violations.length) {
-          const retryContent = await callTraced('LLM call (API-check repair)', [
+          const retryContent = await callTraced('调用模型（接口检查修复）', [
             ...messages,
             {role: 'assistant', content},
             {
@@ -996,10 +996,10 @@ export class AiController extends Controller {  constructor(server: Server) {
         }
       }
       traceSteps.push(!apiChecked
-        ? {name: 'Tracer API-surface check', status: 'skipped', detail: changed ? `language '${dryRunLanguage}' is not API-checked` : 'code unchanged - nothing to check'}
+        ? {name: 'Tracer 接口检查', status: 'skipped', detail: changed ? `语言 ${dryRunLanguage} 不做接口检查` : '代码未变——无需检查'}
         : apiFirstViolations.length
-          ? {name: 'Tracer API-surface check', status: 'triggered', detail: `${apiFirstViolations.length} violation(s): ${apiFirstViolations.join(' | ').slice(0, 400)} - one repair round sent; ${apiError ? 'violations remain - API error attached to the reply' : 'repaired reply passed'}`}
-          : {name: 'Tracer API-surface check', status: 'ok', detail: 'every tracer call matches the real library surface'});
+          ? {name: 'Tracer 接口检查', status: 'triggered', detail: `${apiFirstViolations.length} 处违规：${apiFirstViolations.join(' | ').slice(0, 400)}——已发送一轮修复；${apiError ? '违规仍在，回复已附 API 错误' : '修复后的回复已通过'}`}
+          : {name: 'Tracer 接口检查', status: 'ok', detail: '所有 tracer 调用都符合真实库接口'});
       // Dry-run validation: when the proposal uses the tracer
       // library, actually run it (the same machinery a Build uses)
       // before handing it over - a syntax check cannot see a
@@ -1023,7 +1023,7 @@ export class AiController extends Controller {  constructor(server: Server) {
         let run = await dryRunVisualization(dryRunLanguage, reply.code);
         if (!run.ok) {
           dryRunFirstError = run.error || 'The visualization run failed.';
-          const retryContent = await callTraced('LLM call (dry-run repair)', [
+          const retryContent = await callTraced('调用模型（试运行修复）', [
             ...messages,
             {role: 'assistant', content},
             {
@@ -1048,24 +1048,24 @@ export class AiController extends Controller {  constructor(server: Server) {
         }
       }
       traceSteps.push(!dryRunChecked
-        ? {name: 'Dry run (execute the proposal)', status: 'skipped', detail: !changed ? 'code unchanged - nothing to run' : !['py', 'js', 'java'].includes(dryRunLanguage) ? `language '${dryRunLanguage}' is not dry-run` : 'no tracer / visualization usage mentioned in the code'}
+        ? {name: '试运行（执行提议代码）', status: 'skipped', detail: !changed ? '代码未变——无需运行' : !['py', 'js', 'java'].includes(dryRunLanguage) ? `语言 ${dryRunLanguage} 不做试运行` : '代码中未提及 tracer / 可视化用法'}
         : dryRunFirstError
-          ? {name: 'Dry run (execute the proposal)', status: 'triggered', detail: `first run failed: ${String(dryRunFirstError).split('\n')[0].slice(0, 300)} - one repair round sent and re-run; ${runError ? `STILL failing: ${String(runError).split('\n')[0].slice(0, 300)}` : 'repaired code runs and produces a visualization'}`}
-          : {name: 'Dry run (execute the proposal)', status: 'ok', detail: 'the proposal was executed and produced a working visualization'});
+          ? {name: '试运行（执行提议代码）', status: 'triggered', detail: `首次运行失败：${String(dryRunFirstError).split('\n')[0].slice(0, 300)}——已发送一轮修复并重新运行；${runError ? `仍失败：${String(runError).split('\n')[0].slice(0, 300)}` : '修复后的代码可以运行并生成可视化'}`}
+          : {name: '试运行（执行提议代码）', status: 'ok', detail: '提议代码已执行并生成了可用的可视化'});
       // Check the proposal compiles before the user is asked to review
       // it; a broken proposal is labelled, not silently handed over.
       const syntax = changed ? await checkSyntax(String(language || 'js'), reply.code) : null;
       traceSteps.push(!changed
-        ? {name: 'Syntax check', status: 'skipped', detail: 'code unchanged'}
+        ? {name: '语法检查', status: 'skipped', detail: '代码未变'}
         : syntax === null
-          ? {name: 'Syntax check', status: 'skipped', detail: `no cheap syntax check exists for language '${String(language || 'js')}'`}
+          ? {name: '语法检查', status: 'skipped', detail: `语言 ${String(language || 'js')} 没有轻量语法检查`}
           : syntax.ok
-            ? {name: 'Syntax check', status: 'ok', detail: 'the proposal compiles / parses cleanly'}
-            : {name: 'Syntax check', status: 'error', detail: String(syntax.error || 'syntax check failed').split('\n')[0].slice(0, 300)});
+            ? {name: '语法检查', status: 'ok', detail: '提议代码可以正常编译 / 解析'}
+            : {name: '语法检查', status: 'error', detail: String(syntax.error || '语法检查失败').split('\n')[0].slice(0, 300)});
       traceSteps.push({
-        name: 'Reply ready',
+        name: '回复就绪',
         status: 'ok',
-        detail: changed ? 'code change proposed - shown to the user as a per-hunk diff to accept or reject' : 'no code change - explanation only',
+        detail: changed ? '已提议代码修改——以逐块 diff 展示给用户接受或拒绝' : '无代码修改——仅解释',
       });
       const trace = buildTrace(content, messages);
       const fullReply = {...reply, changed, partialSuspected, runError: runError || undefined, apiError: apiError || undefined};
@@ -1076,12 +1076,12 @@ export class AiController extends Controller {  constructor(server: Server) {
       const data = error && error.response && error.response.data;
       const upstream = (data && data.error && data.error.message)
         || (data && typeof data.message === 'string' && data.message)
-        || (status === 503 ? 'the provider reports the model is overloaded (503, high demand)' : null);
+        || (status === 503 ? '服务方报告模型过载（503，需求过高）' : null);
       const hint = status === 404
-        ? ` - model "${usedModel}" was not found (404): the id is wrong or unavailable to this API key; Admin -> AI Call Log -> "List models my key can use" shows the exact ids`
+        ? `——模型 "${usedModel}" 未找到（404）：id 错误或该 API key 无权使用；管理后台 → AI 调用记录 → "列出我的 key 可用的模型" 可查看准确的 id`
         : '';
-      const message = `LLM call failed: ${upstream || (error && error.message) || 'unknown error'}${hint}${totalAttempts > 1 ? ` (after ${totalAttempts} attempts)` : ''}`;
-      traceSteps.push({name: 'Request failed', status: 'error', detail: message.slice(0, 600)});
+      const message = `调用模型失败：${upstream || (error && error.message) || '未知错误'}${hint}${totalAttempts > 1 ? `（已尝试 ${totalAttempts} 次）` : ''}`;
+      traceSteps.push({name: '请求失败', status: 'error', detail: message.slice(0, 600)});
       logCall({status: 'error', error: message, trace: buildTrace(null, lastSentMessages)} as any);
       return res.status(502).json({message, trace: buildTrace(null, lastSentMessages)});
     }
