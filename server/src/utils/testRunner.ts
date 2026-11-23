@@ -7,9 +7,10 @@ import { codesDir } from 'config/paths';
 // LeetCode-style test runs for a code pad: the user's code plus a set
 // of cases ({args, expected}) are handed to a small per-language
 // driver, which resolves the entry point (a Solution class method,
-// or a top-level function of the same name), calls it once per case
-// with JSON-decoded arguments, and compares the JSON-normalized
-// return value against the expected one. Visualization libraries are
+// a top-level function of the same name, or - for Java - a static
+// method on the file's public class when it declares no Solution),
+// calls it once per case with JSON-decoded arguments, and compares
+// the JSON-normalized return value against the expected one. Visualization libraries are
 // stubbed with no-ops, so an instrumented pad can be tested as-is;
 // the stubs are best-effort (Randomize returns zero-filled data).
 //
@@ -320,9 +321,6 @@ public class Driver {
     String loadError = null;
     try {
       solutionClass = Class.forName(className);
-      Constructor<?> ctor = solutionClass.getDeclaredConstructor();
-      ctor.setAccessible(true);
-      instance = ctor.newInstance();
     } catch (Throwable t) {
       loadError = "No usable class " + className + " found (" + t.getClass().getSimpleName()
         + (t.getMessage() != null ? ": " + t.getMessage() : "") + ")";
@@ -346,6 +344,24 @@ public class Driver {
           }
           method.setAccessible(true);
         }
+        // A static entry (the usual shape for a standalone Main pad)
+        // needs no instance: constructing the class could run a demo
+        // constructor, so only instantiate for instance methods.
+        Object target = null;
+        if (!Modifier.isStatic(method.getModifiers())) {
+          if (instance == null) {
+            try {
+              Constructor<?> ctor = solutionClass.getDeclaredConstructor();
+              ctor.setAccessible(true);
+              instance = ctor.newInstance();
+            } catch (Throwable t) {
+              throw new RuntimeException("No usable class " + className + " found ("
+                + t.getClass().getSimpleName()
+                + (t.getMessage() != null ? ": " + t.getMessage() : "") + ")");
+            }
+          }
+          target = instance;
+        }
         Class<?>[] types = method.getParameterTypes();
         Object[] javaArgs = new Object[args.size()];
         for (int i = 0; i < args.size(); i++) javaArgs[i] = convert(args.get(i), types[i]);
@@ -353,7 +369,7 @@ public class Driver {
         System.setOut(new PrintStream(buf, true, "UTF-8"));
         Object result;
         try {
-          result = method.invoke(instance, javaArgs);
+          result = method.invoke(target, javaArgs);
         } finally {
           System.setOut(oldOut);
         }
@@ -447,13 +463,21 @@ export async function runTests(
   if (!parsedEntry) {
     throw new Error(`"${entry}" is not a valid function/method name.`);
   }
+  // Java: a bare entry names a method, not a class. Resolve the class
+  // to test against: the entry's own class part, else a Solution class
+  // the file declares, else the file's public class (a standalone
+  // visualized pad is usually "public class Main"), else Solution.
+  const publicClass = /public\s+class\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(code);
+  const entryClassName = language === 'java' && !parsedEntry.className
+    ? (/\bclass\s+Solution\b/.test(code) ? 'Solution' : (publicClass ? publicClass[1] : 'Solution'))
+    : parsedEntry.className;
   const startedAt = Date.now();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'av-tests-'));
   try {
     const specPath = path.join(dir, 'spec.json');
     await fs.writeFile(specPath, JSON.stringify({
       entry: parsedEntry.method,
-      className: parsedEntry.className,
+      className: entryClassName,
       cases,
     }));
     let stdout: string;
@@ -484,7 +508,6 @@ export async function runTests(
       // a package-private Solution beside it - javac refuses a
       // public class in a differently named file); a bare
       // Solution-only file keeps the Solution.java name.
-      const publicClass = /public\s+class\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(code);
       const codeFileName = publicClass ? `${publicClass[1]}.java` : 'Solution.java';
       await fs.writeFile(path.join(dir, codeFileName), code);
       await fs.writeFile(path.join(dir, 'Driver.java'), JAVA_DRIVER);
