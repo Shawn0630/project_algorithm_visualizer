@@ -4,6 +4,14 @@ import { actions } from 'reducers';
 import { AiApi, PadTestsApi, PadChatsApi } from 'apis';
 import { extension, aiPadKey, AI_SESSION_DELETE_EVENT, TESTCASES_APPLY_EVENT } from 'common/util';
 import { computeHunks, applyHunks } from './diff';
+import {
+  MAX_ATTACHMENTS,
+  MAX_TEST_ATTACHMENTS,
+  attachmentsToPayload,
+  filesFromPasteEvent,
+  imageNoteForHistory,
+  processImageFiles,
+} from './attachments';
 import styles from './AiAssistant.module.scss';
 
 // AI assistant panel, docked as its own workspace pane next to the
@@ -109,7 +117,17 @@ function saveSessions(sessions) {
         data[key] = {
           ...session,
           messages: session.messages.map((message, i) =>
-            i === session.messages.length - 1 ? message : { ...message, code: null, trace: slimTrace(message.trace) }),
+            i === session.messages.length - 1 ? message : {
+              ...message, code: null, trace: slimTrace(message.trace),
+              // Older turns keep the image names (so the history
+              // note still knows a screenshot was there) but shed
+              // the bytes - one raw screenshot would eat the whole
+              // 2 MB localStorage budget.
+              images: undefined,
+              imageNames: message.images && message.images.length
+                ? message.images.map(image => image.name)
+                : message.imageNames,
+            }),
         };
       });
     }
@@ -204,8 +222,12 @@ class AiAssistant extends React.Component {
       showTrace: loadTracePref(),
       activeTab: 'code',
       testChats: {}, testInput: '', testSending: false, testError: '',
+      attachments: [], attachError: '',
+      testAttachments: [], testAttachError: '',
     };
     this.logRef = React.createRef();
+    this.attachInputRef = React.createRef();
+    this.testAttachInputRef = React.createRef();
     this.testLoadedKeys = new Set();
     this.testPersistTimers = {};
     this.chatSyncTimers = {};
@@ -463,7 +485,7 @@ class AiAssistant extends React.Component {
     });
     session.messages.forEach(message => {
       if (message.from === 'user') {
-        turns.push({ role: 'user', content: message.text });
+        turns.push({ role: 'user', content: message.text + imageNoteForHistory(message.images, message.imageNames) });
       } else {
         turns.push(aiTurn(message.text, message.code, noteFor(message), message.testCases));
       }
@@ -474,9 +496,83 @@ class AiAssistant extends React.Component {
     return turns;
   }
 
+  // ---- Screenshot attachments (Finance Mate pattern) ----
+  // Paste (Ctrl/Cmd+V) or the 📎 button: images are downscaled
+  // (see attachments.js), queued as thumbnails, and ride to the
+  // model as image parts on that turn only. A clipboard without
+  // files pastes as text, untouched.
+  addAttachments(files, which) {
+    const isTest = which === 'tests';
+    const max = isTest ? MAX_TEST_ATTACHMENTS : MAX_ATTACHMENTS;
+    const existing = isTest ? this.state.testAttachments : this.state.attachments;
+    processImageFiles(files, max, existing.length).then(({ added, errors }) => {
+      if (!added.length && !errors.length) return;
+      this.setState(prev => (isTest
+        ? { testAttachments: [...prev.testAttachments, ...added], testAttachError: errors.join(' ') }
+        : { attachments: [...prev.attachments, ...added], attachError: errors.join(' ') }));
+    });
+  }
+
+  removeAttachment(id, which) {
+    const isTest = which === 'tests';
+    this.setState(prev => (isTest
+      ? { testAttachments: prev.testAttachments.filter(a => a.id !== id) }
+      : { attachments: prev.attachments.filter(a => a.id !== id) }));
+  }
+
+  handleComposerPaste(event, which) {
+    const files = filesFromPasteEvent(event);
+    if (!files.length) return;
+    event.preventDefault();
+    this.addAttachments(files, which);
+  }
+
+  renderAttachments(which) {
+    const isTest = which === 'tests';
+    const attachments = isTest ? this.state.testAttachments : this.state.attachments;
+    const error = isTest ? this.state.testAttachError : this.state.attachError;
+    if (!attachments.length && !error) return null;
+    return (
+      <React.Fragment>
+        {attachments.length ? (
+          <div className={styles.attach_row}>
+            {attachments.map(attachment => (
+              <span key={attachment.id} className={styles.attach_chip}>
+                <a href={attachment.dataUrl} target="_blank" rel="noopener noreferrer">
+                  <img className={styles.attach_thumb} src={attachment.dataUrl} alt={attachment.name}/>
+                </a>
+                <span className={styles.attach_name}>{attachment.name}</span>
+                <button className={styles.attach_remove} title="Remove" onClick={() => this.removeAttachment(attachment.id, which)}>×</button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {error ? <div className={styles.error}>{error}</div> : null}
+      </React.Fragment>
+    );
+  }
+
+  renderMessageImages(message) {
+    if (!message.images || !message.images.length) return null;
+    return (
+      <div className={styles.attach_row}>
+        {message.images.map(image => (
+          <a key={image.id || image.name} href={image.dataUrl} target="_blank" rel="noopener noreferrer">
+            <img className={styles.attach_thumb} src={image.dataUrl} alt={image.name}/>
+          </a>
+        ))}
+      </div>
+    );
+  }
+
   send(instruction) {
     const { editingFile, titles, files } = this.props.current;
-    const text = (instruction !== undefined ? instruction : this.state.instruction).trim();
+    const attachments = this.state.attachments;
+    const rawText = (instruction !== undefined ? instruction : this.state.instruction).trim();
+    // An image-only turn still needs an instruction (the reply
+    // contract is a JSON object driven by one); the default asks
+    // the model to work from what the screenshots show.
+    const text = rawText || (attachments.length ? 'Look at the attached image(s) and help me with what they show, in the context of the current file.' : '');
     if (!editingFile || !text || this.state.busy) return;
     // The reply is written back to the pad that asked, even if the user
     // switches files while waiting.
@@ -493,16 +589,17 @@ class AiAssistant extends React.Component {
         trace: session.pending.trace || null,
       });
     }
-    messages.push({ from: 'user', text });
+    messages.push({ from: 'user', text, images: attachments.length ? attachments : undefined });
     const history = this.buildHistory({ messages: messages.slice(0, -1), pending: null });
     this.updateSession({ messages, pending: null }, key);
-    this.setState({ busy: true, error: '', instruction: '' });
+    this.setState({ busy: true, error: '', instruction: '', attachments: [], attachError: '' });
     const sentCode = editingFile.content;
 
     AiApi.assist({
       code: editingFile.content,
       language: extension(editingFile.name),
       instruction: text,
+      images: attachmentsToPayload(attachments),
       model: this.state.selectedModel || undefined,
       history,
       context: {
@@ -674,7 +771,16 @@ class AiAssistant extends React.Component {
     this.setState(prev => ({ testChats: { ...prev.testChats, [key]: messages } }));
     window.clearTimeout(this.testPersistTimers[key]);
     this.testPersistTimers[key] = window.setTimeout(() => {
-      PadTestsApi.put({ key, chat: messages }).catch(() => {});
+      // pad_tests caps the whole chat at 512 KB JSON: only the
+      // latest user message keeps its image bytes; older turns
+      // keep the names so the history note still applies.
+      const lastUser = [...messages].reverse().find(m => m.role === 'user');
+      const slimmed = messages.map(m => (m === lastUser || !m.images ? m : {
+        ...m,
+        images: undefined,
+        imageNames: m.images.map(image => image.name),
+      }));
+      PadTestsApi.put({ key, chat: slimmed }).catch(() => {});
     }, 500);
   }
 
@@ -682,13 +788,15 @@ class AiAssistant extends React.Component {
     const { editingFile, files } = this.props.current;
     const key = this.padKey();
     if (!editingFile || !key) return;
-    const instruction = (preset !== undefined ? preset : this.state.testInput).trim();
+    const attachments = this.state.testAttachments;
+    const rawInstruction = (preset !== undefined ? preset : this.state.testInput).trim();
+    const instruction = rawInstruction || (attachments.length ? 'Look at the attached image(s) and help me with the test cases for what they show.' : '');
     if (!instruction || this.state.testSending) return;
     const prior = this.testChat();
-    const history = prior.slice(-20).map(m => ({ role: m.role, content: m.text }));
-    const working = [...prior, { role: 'user', text: instruction }].slice(-100);
+    const history = prior.slice(-20).map(m => ({ role: m.role, content: m.text + imageNoteForHistory(m.images, m.imageNames) }));
+    const working = [...prior, { role: 'user', text: instruction, images: attachments.length ? attachments : undefined }].slice(-100);
     this.updateTestChat(working);
-    this.setState({ testInput: '', testSending: true, testError: '' });
+    this.setState({ testInput: '', testSending: true, testError: '', testAttachments: [], testAttachError: '' });
     // The pad's current entry + cases live in the Testcase panel's
     // record; re-read it fresh so the AI refines what the panel
     // actually shows, not a stale copy.
@@ -712,6 +820,7 @@ class AiAssistant extends React.Component {
         currentCases,
         history,
         instruction,
+        images: attachmentsToPayload(attachments),
         model: this.state.selectedModel || undefined,
       });
     }).then(({ message, entry, mode, cases, trace }) => {
@@ -754,7 +863,10 @@ class AiAssistant extends React.Component {
         {
           messages.map((message, i) => (
             message.role === 'user' ? (
-              <div key={i} className={styles.user_message}>{message.text}</div>
+              <div key={i} className={styles.user_message}>
+                {this.renderMessageImages(message)}
+                {message.text}
+              </div>
             ) : (
               <div key={i} className={styles.ai_message}>
                 <div className={styles.text}>{message.text}</div>
@@ -1014,7 +1126,10 @@ class AiAssistant extends React.Component {
                 {
                   session.messages.map((message, i) => (
                     message.from === 'user' ? (
-                      <div key={i} className={styles.user_message}>{message.text}</div>
+                      <div key={i} className={styles.user_message}>
+                        {this.renderMessageImages(message)}
+                        {message.text}
+                      </div>
                     ) : (
                       <div key={i} className={styles.ai_message}>
                         {
@@ -1049,14 +1164,22 @@ class AiAssistant extends React.Component {
                   </button>
                 ))}
               </div>
+              {this.renderAttachments('tests')}
               <div className={styles.row}>
                 <input className={styles.input} type="text" value={testInput} disabled={!isCode}
                        placeholder="Ask for test cases, e.g. add an empty-array case"
                        onChange={e => this.setState({ testInput: e.target.value })}
+                       onPaste={e => this.handleComposerPaste(e, 'tests')}
                        onKeyDown={e => {
                          if (e.key === 'Enter') this.sendTestChat();
                        }}/>
-                <button className={styles.send} disabled={testSending || !isCode || !testInput.trim()} onClick={() => this.sendTestChat()}>
+                <button className={styles.attach_btn} title="Attach a screenshot" disabled={testSending || !isCode}
+                        onClick={() => this.testAttachInputRef.current && this.testAttachInputRef.current.click()}>
+                  📎
+                </button>
+                <input ref={this.testAttachInputRef} type="file" accept="image/*" multiple style={{display: 'none'}}
+                       onChange={e => { this.addAttachments([...e.target.files], 'tests'); e.target.value = ''; }}/>
+                <button className={styles.send} disabled={testSending || !isCode || (!testInput.trim() && !this.state.testAttachments.length)} onClick={() => this.sendTestChat()}>
                   {testSending ? 'Working...' : 'Send'}
                 </button>
               </div>
@@ -1072,16 +1195,24 @@ class AiAssistant extends React.Component {
                   </button>
                 ))}
               </div>
+              {this.renderAttachments('code')}
               <div className={styles.row}>
                 <input className={styles.input} type="text" value={instruction} disabled={!isCode && !isMd}
                        placeholder={isMd
                          ? 'Tell the AI what to do with this note, e.g. add a summary of the problem'
                          : 'Tell the AI what to do with this code, e.g. turn bubble sort into quicksort'}
                        onChange={e => this.setState({ instruction: e.target.value })}
+                       onPaste={e => this.handleComposerPaste(e, 'code')}
                        onKeyDown={e => {
                          if (e.key === 'Enter') this.send();
                        }}/>
-                <button className={styles.send} disabled={busy || (!isCode && !isMd) || !instruction.trim()} onClick={() => this.send()}>
+                <button className={styles.attach_btn} title="Attach a screenshot" disabled={busy || (!isCode && !isMd)}
+                        onClick={() => this.attachInputRef.current && this.attachInputRef.current.click()}>
+                  📎
+                </button>
+                <input ref={this.attachInputRef} type="file" accept="image/*" multiple style={{display: 'none'}}
+                       onChange={e => { this.addAttachments([...e.target.files], 'code'); e.target.value = ''; }}/>
+                <button className={styles.send} disabled={busy || (!isCode && !isMd) || (!instruction.trim() && !this.state.attachments.length)} onClick={() => this.send()}>
                   {busy ? 'Working...' : 'Send'}
                 </button>
               </div>

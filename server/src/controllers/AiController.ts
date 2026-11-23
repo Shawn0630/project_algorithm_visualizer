@@ -39,6 +39,70 @@ export interface AiTrace {
   steps: AiTraceStep[];
 }
 
+// Screenshot attachments, ported from Finance Mate's AI chats: the
+// frontend pastes / attaches images and sends each as {name, type,
+// data} (data = raw base64, no data: prefix); the image rides to
+// the model as an image_url part on the latest user message. Limits
+// mirror FM: at most 4 images per turn, each at most 5 MB decoded.
+// Images are never stored: the trace and the call log keep a
+// placeholder instead of the base64 bytes, or one screenshot would
+// blow the session store (pad_chats caps messages at 2 MB) and the
+// ai-calls log.
+export interface AiImageAttachment { name: string; type: string; data: string; }
+export const MAX_AI_IMAGES = 4;
+export const MAX_AI_IMAGE_BYTES = 5 * 1024 * 1024;
+
+export function parseImages(body: any): { images: AiImageAttachment[]; error?: { status: number; message: string } } {
+  const raw = body && (body as any).images;
+  if (raw === undefined) return { images: [] };
+  if (!Array.isArray(raw)) return { images: [], error: { status: 400, message: 'Images must be an array.' } };
+  if (raw.length > MAX_AI_IMAGES) {
+    return { images: [], error: { status: 400, message: `At most ${MAX_AI_IMAGES} images per message.` } };
+  }
+  const images: AiImageAttachment[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || typeof (item as any).type !== 'string'
+      || !(item as any).type.startsWith('image/') || typeof (item as any).data !== 'string' || !(item as any).data.trim()) {
+      return { images: [], error: { status: 400, message: 'Attachments must be images (type image/* with base64 data).' } };
+    }
+    const data = (item as any).data.trim();
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+      return { images: [], error: { status: 400, message: 'Attachment data is not valid base64.' } };
+    }
+    const bytes = Buffer.from(data, 'base64').length;
+    if (bytes === 0 || bytes > MAX_AI_IMAGE_BYTES) {
+      return { images: [], error: { status: 413, message: 'Attachment is too large (max 5 MB per image).' } };
+    }
+    images.push({ name: typeof (item as any).name === 'string' ? (item as any).name.slice(0, 200) : 'image', type: (item as any).type, data });
+  }
+  return { images };
+}
+
+export function imageParts(images: AiImageAttachment[]): object[] {
+  return images.map(image => ({ type: 'image_url', image_url: { url: `data:${image.type};base64,${image.data}` } }));
+}
+
+// Trace / log copy of a messages array: image parts keep their
+// place (so the record still shows an image was sent, its type
+// and size) but lose the base64 bytes.
+export function sanitizeMessagesForRecord(messages: any): any {
+  if (!Array.isArray(messages)) return messages;
+  return messages.map((message: any) => {
+    if (!message || typeof message !== 'object' || !Array.isArray(message.content)) return message;
+    return {
+      ...message,
+      content: message.content.map((part: any) => {
+        if (part && part.type === 'image_url' && part.image_url && typeof part.image_url.url === 'string') {
+          const url = part.image_url.url as string;
+          const mime = (url.match(/^data:([^;,]+)/) || [])[1] || 'image';
+          return { type: 'image_url', image_url: { url: `[attached image: ${mime}, ~${Math.round(url.length / 1024)} KB]` } };
+        }
+        return part;
+      }),
+    };
+  });
+}
+
 // AI coding assistant for the editor ("coding pad"). The frontend sends
 // the current file and an instruction; the server makes ONE
 // chat-completions call to the configured OpenAI-compatible endpoint
@@ -549,6 +613,12 @@ export class AiController extends Controller {  constructor(server: Server) {
     if (typeof instruction !== 'string' || !instruction.trim()) {
       return res.status(400).json({ message: 'Missing instruction in the request.' });
     }
+    // Pasted / attached screenshots ride along on this turn only.
+    const parsedImages = parseImages(req.body);
+    if (parsedImages.error) {
+      return res.status(parsedImages.error.status).json({ message: parsedImages.error.message });
+    }
+    const images = parsedImages.images;
     const turns: { role: string, content: string }[] = Array.isArray((req.body as any).history)
       ? (req.body as any).history
         .filter((turn: any) => turn && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string')
@@ -569,7 +639,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       instruction: 'test-chat',
       context: null,
       history: turns,
-      messages: sentMessages,
+      messages: sanitizeMessagesForRecord(sentMessages),
       code,
       rawResponse: null,
       reply: null,
@@ -615,12 +685,14 @@ export class AiController extends Controller {  constructor(server: Server) {
         ].join('\n'),
       },
       ...turns,
-      { role: 'user', content: instruction.trim().slice(0, 8000) },
+      images.length
+        ? { role: 'user', content: [{ type: 'text', text: instruction.trim().slice(0, 8000) }, ...imageParts(images)] }
+        : { role: 'user', content: instruction.trim().slice(0, 8000) },
     ];
     const traceSteps: AiTraceStep[] = [{
       name: '组织提示词',
       status: 'ok',
-      detail: `测试用例对话：系统提示词 + 题目上下文（${Array.isArray(currentCases) ? currentCases.length : 0} 个当前用例）+ ${turns.length} 轮历史，语言 ${String(language || 'js')}`,
+      detail: `测试用例对话：系统提示词 + 题目上下文（${Array.isArray(currentCases) ? currentCases.length : 0} 个当前用例）+ ${turns.length} 轮历史${images.length ? ` + ${images.length} 张图片` : ''}，语言 ${String(language || 'js')}`,
     }];
     try {
       sentMessages = messages;
@@ -650,7 +722,7 @@ export class AiController extends Controller {  constructor(server: Server) {
         durationMs: Date.now() - startedAt,
         attempts: totalAttempts,
         retries: Math.max(0, totalAttempts - 1),
-        messages: messages as { role: string, content: any }[],
+        messages: sanitizeMessagesForRecord(messages) as { role: string, content: any }[],
         rawResponse: content,
         steps: traceSteps,
       };
@@ -673,6 +745,12 @@ export class AiController extends Controller {  constructor(server: Server) {
     if (typeof code !== 'string' || typeof instruction !== 'string' || !instruction.trim()) {
       return res.status(400).json({message: 'Missing code or instruction in the request.'});
     }
+    // Pasted / attached screenshots ride along on this turn only.
+    const parsedImages = parseImages(req.body);
+    if (parsedImages.error) {
+      return res.status(parsedImages.error.status).json({message: parsedImages.error.message});
+    }
+    const images = parsedImages.images;
     // Conversation history of this pad's session, oldest first. Bounded
     // so a long session cannot grow the request without limit.
     const turns: { role: string, content: string }[] = Array.isArray(history)
@@ -733,7 +811,7 @@ export class AiController extends Controller {  constructor(server: Server) {
       instruction,
       context: context || null,
       history: turns,
-      messages: lastSentMessages,
+      messages: sanitizeMessagesForRecord(lastSentMessages),
       code,
       rawResponse: null,
       reply: null,
@@ -839,22 +917,25 @@ export class AiController extends Controller {  constructor(server: Server) {
       durationMs: Date.now() - startedAt,
       attempts: totalAttempts,
       retries: Math.max(0, totalAttempts - llmRounds),
-      messages: sentMessages || null,
+      messages: sanitizeMessagesForRecord(sentMessages) || null,
       rawResponse,
       steps: traceSteps,
     });
     try {
+      const userText = `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`;
       const messages: object[] = [
         {role: 'system', content: isMarkdown ? markdownSystemPrompt() : systemPrompt(String(language || 'js'))},
         ...(contextNote ? [{role: 'system', content: contextNote}] : []),
         ...(readmeNote ? [{role: 'system', content: readmeNote}] : []),
         ...turns,
-        {role: 'user', content: `Instruction:\n${instruction}\n\nCurrent file (authoritative):\n${code}`},
+        images.length
+          ? {role: 'user', content: [{type: 'text', text: userText}, ...imageParts(images)]}
+          : {role: 'user', content: userText},
       ];
       traceSteps.push({
         name: '组织提示词',
         status: 'ok',
-        detail: `${messages.length} 条消息（系统提示词${contextNote ? ' + 窗口上下文' : ''}${readmeNote ? ' + 页面文档' : ''} + ${turns.length} 轮历史 + 用户提问），语言 ${String(language || 'js')}${isMarkdown ? '，markdown 笔记模式（跳过代码检查）' : ''}`,
+        detail: `${messages.length} 条消息（系统提示词${contextNote ? ' + 窗口上下文' : ''}${readmeNote ? ' + 页面文档' : ''} + ${turns.length} 轮历史 + 用户提问${images.length ? ` + ${images.length} 张图片` : ''}），语言 ${String(language || 'js')}${isMarkdown ? '，markdown 笔记模式（跳过代码检查）' : ''}`,
       });
       // Primary model first; if it stays overloaded / unreachable
       // through its whole retry chain and a fallback model is

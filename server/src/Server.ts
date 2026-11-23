@@ -26,7 +26,11 @@ export default class Server {
       .use(compression())
       .use(morgan(__PROD__ ? 'tiny' : 'dev'))
       .use(redirectMiddleware())
-      .use(bodyParser.json())
+      // Pasted screenshots arrive as base64 JSON on the AI
+      // endpoints (Finance Mate raises its limit for the same
+      // reason); 10 MB covers a few images at the 5 MB per-image
+      // cap with headroom, and the per-image cap still applies.
+      .use(bodyParser.json({ limit: '10mb' }))
       .use(bodyParser.urlencoded({extended: true}))
       .use('/api', this.getApiRouter())
       .use(frontendMiddleware(this));
