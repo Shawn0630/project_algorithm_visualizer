@@ -79,13 +79,38 @@ class Commander:
 
     _commands = []
     _object_count = 0
+    # Live tracer/layout objects, in creation order, and the object most
+    # recently installed by Layout.set_root (None until the first call).
+    # The test-case harness needs both: it empties _commands to drop the
+    # pad's own driver frames, then replays the creation commands of the
+    # objects that are still alive (see replay_creates) so the case it
+    # runs can keep talking to them - without the replay, every later
+    # call on one of those objects arrives at the frontend under a key
+    # it never saw created, and the viewer fails on each of them.
+    _live = []
+    _root = None
 
     def __init__(self, args=()):
         Commander._object_count += 1
         if Commander._object_count > _MAX_OBJECTS:
             raise RuntimeError("Too Many Objects")
         self.key = _random_key()
-        Commander._append(self.key, type(self).__name__, args)
+        self._create_method = type(self).__name__
+        self._create_args = _normalize(args)
+        Commander._live.append(self)
+        Commander._append(self.key, self._create_method, self._create_args)
+
+    @staticmethod
+    def replay_creates():
+        """Re-append the creation command of every live tracer/layout,
+        in creation order. Used by the test-case harness after it
+        empties the command list: the pad's objects are still alive
+        and the case below still calls them, so their creation
+        commands must be in the stream again before any of their
+        method commands. Creates nothing new and changes no object
+        count - it only re-records what already exists."""
+        for obj in list(Commander._live):
+            Commander._append(obj.key, obj._create_method, obj._create_args)
 
     @staticmethod
     def _append(key, method, args):
@@ -100,6 +125,7 @@ class Commander:
 
     def destroy(self):
         Commander._object_count -= 1
+        Commander._live = [obj for obj in Commander._live if obj is not self]
         self._command("destroy", [])
 
 
@@ -142,6 +168,7 @@ class Layout(Commander):
 
     @staticmethod
     def set_root(child):
+        Commander._root = child
         Commander._append(None, "setRoot", [child])
 
     # camelCase alias, matching the other languages' spelling

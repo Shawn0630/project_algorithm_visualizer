@@ -263,7 +263,12 @@ class VisualizationViewer extends BaseComponent {
         const TracerClass = TracerClasses[className];
         this.objects[key] = new TracerClass(key, key => this.objects[key], title);
       } else {
-        this.objects[key][method](...args);
+        // A method call for an object this stream never created
+        // (a stale key) is dropped, not thrown: one such command
+        // must not take the viewer down, and a replay would
+        // re-raise it on every seek.
+        const target = this.objects[key];
+        if (target) target[method](...args);
       }
     } catch (error) {
       this.handleError(error);

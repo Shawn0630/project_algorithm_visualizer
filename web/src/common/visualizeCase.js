@@ -14,8 +14,12 @@
 // harness's first act is to empty the central command list
 // (Commander._commands / Commander.commands) that every tracer
 // records into, so none of the pad's own frames reach the
-// player. At that point the list holds only the pad's commands:
-// nothing before it in the run records any. Java needs none of
+// player. The Python harness then replays the creation commands
+// of the pad's live tracers/layouts (Commander.replay_creates)
+// and puts the pad's own root above the harness views: the case
+// may call into an instrumented pad, and those objects are still
+// alive - without the replay their calls would arrive at the
+// frontend under keys it never saw created. Java needs none of
 // this: the harness's Main is the only entry point, so nothing
 // else in the file can run.
 const ENTRY_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -50,7 +54,15 @@ from algorithm_visualizer import Commander as _VizCommander, Tracer as _VizTrace
 
 # Discard everything the file's own top-level code recorded
 # (its driver / demo runs): only the selected case plays.
+# Then re-create the pad's own tracers/layouts: their creation
+# commands were discarded with the driver's frames, but the
+# objects are still alive and the case below still talks to
+# them - without the replay, every such call arrives at the
+# frontend under a key it never saw created, and the viewer
+# fails on each of them.
 del _VizCommander._commands[:]
+_VizCommander.replay_creates()
+_viz_pad_root = _VizCommander._root
 _viz_args = _viz_json.loads(${argsLiteral(args)})
 _viz_log = _VizLogTracer()
 _viz_views = []
@@ -62,7 +74,13 @@ for _viz_a in _viz_args:
 _viz_result_tracer = _VizArray1DTracer()
 _viz_views.append(_viz_result_tracer)
 _viz_views.append(_viz_log)
-_VizLayout.set_root(_VizVerticalLayout(_viz_views))
+if isinstance(_viz_pad_root, _VizCommander):
+    # The pad already has its own visualization, and the case
+    # below animates through its tracers: keep that at the top
+    # and put the harness views underneath it.
+    _VizLayout.set_root(_VizVerticalLayout([_viz_pad_root] + _viz_views))
+else:
+    _VizLayout.set_root(_VizVerticalLayout(_viz_views))
 _viz_target = None
 _viz_cls = globals().get('Solution')
 if _viz_cls is not None and hasattr(_viz_cls, '${entry}'):

@@ -18,6 +18,46 @@ class Solution {
 }
 `;
 
+describe('buildCaseVisualization - python', () => {
+  const INSTRUMENTED_PAD = `from algorithm_visualizer import Array2DTracer, Layout, LogTracer, Tracer, VerticalLayout
+
+array2d_tracer = Array2DTracer('Matrix')
+log_tracer = LogTracer('Console')
+
+def solve(data):
+    array2d_tracer.set([[1, 2], [3, 4]])
+    Tracer.delay()
+    return [1, 2]
+
+def main():
+    Layout.set_root(VerticalLayout([array2d_tracer, log_tracer]))
+    Tracer.delay()
+    return solve([])
+
+if __name__ == "__main__":
+    main()
+`;
+
+  it('still clears the pad driver commands before the case runs', () => {
+    const out = buildCaseVisualization('py', INSTRUMENTED_PAD, 'solve', [[]]);
+    expect(out).toContain('del _VizCommander._commands[:]');
+  });
+
+  it('replays the pad tracers creation commands after the clear, so the case can keep talking to them', () => {
+    const out = buildCaseVisualization('py', INSTRUMENTED_PAD, 'solve', [[]]);
+    expect(out.indexOf('del _VizCommander._commands[:]')).toBeLessThan(out.indexOf('_VizCommander.replay_creates()'));
+    expect(out.indexOf('_VizCommander.replay_creates()')).toBeLessThan(out.indexOf('_viz_target = None'));
+  });
+
+  it('keeps the pad own root above the harness views when the pad set one', () => {
+    const out = buildCaseVisualization('py', INSTRUMENTED_PAD, 'solve', [[]]);
+    expect(out).toContain('_viz_pad_root = _VizCommander._root');
+    expect(out).toContain("if isinstance(_viz_pad_root, _VizCommander):");
+    expect(out).toContain('_VizLayout.set_root(_VizVerticalLayout([_viz_pad_root] + _viz_views))');
+    expect(out).toContain('_VizLayout.set_root(_VizVerticalLayout(_viz_views))');
+  });
+});
+
 describe('buildCaseVisualization - java', () => {
   it('demotes a public entry class to package-private so the harness compiles as Main.java', () => {
     const out = buildCaseVisualization('java', PUBLIC_SOLUTION, 'Solution.findFraudulentUsers', [[['u1', 1]], 1, 10]);
