@@ -1,9 +1,10 @@
 // Wraps a code pad's source with a small generated harness that
-// calls the pad's test entry point (a Solution class method, or a
-// top-level function - the same resolution the test runner uses)
-// with ONE test case's arguments, inside the real tracer
-// environment: a LogTracer narrates Input -> Output, and numeric
-// arrays (arguments, and the return value) get Array1DTracer views.
+// calls the pad's test entry point (a Solution class method, a
+// method on the file's public class, or a top-level function - the
+// same resolution the test runner uses) with ONE test case's
+// arguments, inside the real tracer environment: a LogTracer
+// narrates Input -> Output, and numeric arrays (arguments, and the
+// return value) get Array1DTracer views.
 // The wrapped source is what the Player builds and plays, so the
 // case's execution animates in the visualization pane exactly like
 // a hand-instrumented pad. The pad itself is never modified.
@@ -20,8 +21,9 @@
 // may call into an instrumented pad, and those objects are still
 // alive - without the replay their calls would arrive at the
 // frontend under keys it never saw created. Java needs none of
-// this: the harness's Main is the only entry point, so nothing
-// else in the file can run.
+// this: the harness is the only entry point - either the file's
+// own Main, with its demo main() replaced by the case call, or
+// an appended Main - so nothing else in the file can run.
 const ENTRY_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 // An entry may be a bare method name ("search") or the
@@ -150,34 +152,193 @@ if (!_vizTarget) {
 `;
 }
 
-function javaHarness(code, entry, args, className) {
-  if (/\bclass\s+Main\b/.test(code)) {
-    throw new Error('This Java file already defines a Main class - Build already runs it as-is, so there is nothing for the case harness to add.');
-  }
-  if (!new RegExp(`\\bclass\\s+${className}\\b`).test(code)) {
-    throw new Error(`Visualizing a case needs a class ${className} in the Java file (the harness adds a Main that calls its entry method).`);
-  }
-  // A LeetCode-style paste declares `public class Solution`, but the
-  // harness is written out as Main.java - javac refuses a public
-  // class in a wrongly-named file. Demote the entry class to
-  // package-private in the generated output (first occurrence,
-  // anchored on the class declaration, keeping any final/abstract
-  // modifiers): the generated Main accesses it via reflection in
-  // the same file, so package-private is sufficient. The pad
-  // itself is never modified.
-  const demoted = code.replace(
-    new RegExp(`\\bpublic\\s+((?:final\\s+|abstract\\s+)*)class\\s+${className}\\b`),
-    '$1class ' + className
-  );
-  return `import org.algorithm_visualizer.*;
-import com.google.gson.*;
-import java.lang.reflect.*;
-import java.util.*;
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
-${demoted}
+// A mask of the Java source: mask[i] is true when position i is real
+// code, false when it is inside a string literal, a char literal, a
+// line/block comment or a text block. Brace matching and declaration
+// searches only look at real code, so a "{" in a log string or a
+// commented-out method can never confuse them.
+function javaCodeMask(code) {
+  const mask = new Array(code.length).fill(true);
+  const blank = (from, to) => { for (let j = from; j < to; j++) mask[j] = false; };
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    const next = code[i + 1];
+    if (c === '/' && next === '/') {
+      const start = i;
+      while (i < code.length && code[i] !== '\n') i++;
+      blank(start, i);
+    } else if (c === '/' && next === '*') {
+      const start = i;
+      i += 2;
+      while (i < code.length && !(code[i] === '*' && code[i + 1] === '/')) i++;
+      i = Math.min(code.length, i + 2);
+      blank(start, i);
+    } else if (c === '"') {
+      if (code[i + 1] === '"' && code[i + 2] === '"') {
+        // Text block: """ ... """
+        const start = i;
+        i += 3;
+        while (i < code.length && !(code[i] === '"' && code[i + 1] === '"' && code[i + 2] === '"')) {
+          if (code[i] === '\\') i++;
+          i++;
+        }
+        i = Math.min(code.length, i + 3);
+        blank(start, i);
+      } else {
+        const start = i;
+        i++;
+        while (i < code.length && code[i] !== '"') {
+          if (code[i] === '\\') i++;
+          i++;
+        }
+        i = Math.min(code.length, i + 1);
+        blank(start, i);
+      }
+    } else if (c === "'") {
+      const start = i;
+      i++;
+      while (i < code.length && code[i] !== "'") {
+        if (code[i] === '\\') i++;
+        i++;
+      }
+      i = Math.min(code.length, i + 1);
+      blank(start, i);
+    } else {
+      i++;
+    }
+  }
+  return mask;
+}
 
+// The first match of a global regex whose start is real code, or null.
+// (Callers must pass a regex with the /g flag.)
+function firstCodeMatch(code, mask, re) {
+  re.lastIndex = 0;
+  let m;
+  while ((m = re.exec(code)) !== null) {
+    if (mask[m.index]) return m;
+    if (m[0].length === 0) re.lastIndex++;
+  }
+  return null;
+}
+
+// First index at or after `from` where `ch` occurs in real code, or -1.
+function indexOfCodeChar(code, mask, ch, from) {
+  for (let i = from; i < code.length; i++) {
+    if (mask[i] && code[i] === ch) return i;
+  }
+  return -1;
+}
+
+// The index of the `}` matching the `{` at openIndex (real code only),
+// or -1 when the braces are unbalanced.
+function matchingBrace(code, mask, openIndex) {
+  let depth = 0;
+  for (let i = openIndex; i < code.length; i++) {
+    if (!mask[i]) continue;
+    if (code[i] === '{') depth++;
+    else if (code[i] === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+// A main(String[] ...) declaration, in its usual spellings
+// (String[] args, String args[], String... args, final String[] args).
+const MAIN_DECL = /\b(?:public\s+)?static\s+void\s+main\s*\(\s*(?:final\s+)?String\s*(?:\[\s*\]|\.\.\.)?\s*[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\[\s*\])?\s*\)/g;
+
+// The file with main()'s body replaced by `newBody` (one complete
+// statement). Returns null when the file has no main() or its braces
+// are unbalanced.
+function replaceMainBody(code, mask, newBody) {
+  const decl = firstCodeMatch(code, mask, MAIN_DECL);
+  if (!decl) return null;
+  const open = indexOfCodeChar(code, mask, '{', decl.index + decl[0].length);
+  if (open < 0) return null;
+  const close = matchingBrace(code, mask, open);
+  if (close < 0) return null;
+  return code.slice(0, open + 1) + '\n        ' + newBody + '\n    ' + code.slice(close);
+}
+
+// The file with a main() added to its Main class, calling `newBody`.
+// Returns null when the file has no Main class or its braces are
+// unbalanced.
+function addMainMethod(code, mask, newBody) {
+  const decl = firstCodeMatch(code, mask, /\bclass\s+Main\b/g);
+  if (!decl) return null;
+  const open = indexOfCodeChar(code, mask, '{', decl.index + decl[0].length);
+  if (open < 0) return null;
+  const close = matchingBrace(code, mask, open);
+  if (close < 0) return null;
+  const method = '\n    public static void main(String[] argv) {\n        ' + newBody + '\n    }\n';
+  return code.slice(0, close) + method + code.slice(close);
+}
+
+// Imports the harness needs. A file that already imports a type
+// from one of these packages (wildcard or single-class) needs no
+// further import for it.
+const JAVA_HARNESS_IMPORTS = [
+  'org.algorithm_visualizer.*',
+  'com.google.gson.*',
+  'java.lang.reflect.*',
+  'java.util.*',
+];
+
+function ensureJavaImports(code, mask) {
+  const missing = JAVA_HARNESS_IMPORTS.filter(pkg => {
+    const base = pkg.replace(/\.\*$/, '');
+    return !firstCodeMatch(code, mask, new RegExp(`^\\s*import\\s+${escapeRegExp(base)}\\.(\\*|[A-Z])`, 'gm'));
+  });
+  if (missing.length === 0) return code;
+  const imports = missing.map(pkg => `import ${pkg};`).join('\n') + '\n';
+  const pkgDecl = firstCodeMatch(code, mask, /\bpackage\s+[\w.]+\s*;/g);
+  if (pkgDecl) {
+    const at = pkgDecl.index + pkgDecl[0].length;
+    return code.slice(0, at) + '\n' + imports + code.slice(at);
+  }
+  return imports + code;
+}
+
+// The generated source is written out as Main.java, so the file's
+// public class must be Main (or none): demote any other public
+// class to package-private, keeping final/abstract modifiers.
+function demotePublicClass(code, mask) {
+  const pub = firstCodeMatch(code, mask, /\bpublic\s+((?:final\s+|abstract\s+)*)class\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/g);
+  if (!pub || pub[2] === 'Main') return code;
+  return code.slice(0, pub.index) + (pub[1] || '') + 'class ' + pub[2] + code.slice(pub.index + pub[0].length);
+}
+
+// Entry-class resolution, mirroring the test runner
+// (server/src/utils/testRunner.ts): the entry's own class part, else
+// a Solution class the file declares, else the file's public class,
+// else Solution.
+function resolveJavaEntryClass(code, mask, className) {
+  if (className) return className;
+  if (firstCodeMatch(code, mask, /\bclass\s+Solution\b/g)) return 'Solution';
+  const pub = firstCodeMatch(code, mask, /\bpublic\s+class\s+([A-Za-z_$][A-Za-z0-9_$]*)/g);
+  return pub ? pub[1] : 'Solution';
+}
+
+// The harness itself, shared by both shapes: a package-private
+// helper class appended to the file. run() parses the case args,
+// builds the harness views, finds the entry method on the given
+// class and invokes it - with a null target for a static entry
+// (constructing the class could run a demo constructor), and only
+// an instance entry is instantiated, like the test runner.
+// Nothing here throws: a failure is reported on the log tracer
+// instead of crashing the run, because the harness may be spliced
+// into the file's own main(), whose signature the harness does
+// not own.
+const JAVA_VIZ_HARNESS = `
 // ---- visualize this test case (auto-generated) ----
-public class Main {
+class VizHarness {
     static final Gson GSON = new Gson();
 
     static boolean isNumericArray(JsonElement e) {
@@ -221,8 +382,8 @@ public class Main {
         throw new RuntimeException("Unsupported argument type: " + t.getName());
     }
 
-    public static void main(String[] argv) throws Exception {
-        JsonArray vizArgs = new JsonParser().parse(${argsLiteral(args)}).getAsJsonArray();
+    static void run(Class<?> entryClass, String entry, String argsJson) {
+        JsonArray vizArgs = new JsonParser().parse(argsJson).getAsJsonArray();
         LogTracer log = new LogTracer();
         ArrayList<Commander> views = new ArrayList<>();
         for (JsonElement e : vizArgs) {
@@ -237,28 +398,71 @@ public class Main {
         views.add(log);
         Layout.setRoot(new VerticalLayout(views.toArray(new Commander[0])));
         Method method = null;
-        for (Method m : ${className}.class.getDeclaredMethods()) {
-            if (m.getName().equals("${entry}") && m.getParameterCount() == vizArgs.size() && !m.isBridge()) method = m;
+        for (Method m : entryClass.getDeclaredMethods()) {
+            if (m.getName().equals(entry) && m.getParameterCount() == vizArgs.size() && !m.isBridge()) method = m;
         }
         if (method == null) {
-            log.println("No method ${entry} taking " + vizArgs.size() + " argument(s) found on class ${className}");
+            log.println("No method " + entry + " taking " + vizArgs.size() + " argument(s) found on class " + entryClass.getSimpleName());
             Tracer.delay();
             return;
         }
         method.setAccessible(true);
-        Class<?>[] types = method.getParameterTypes();
-        Object[] callArgs = new Object[vizArgs.size()];
-        for (int i = 0; i < vizArgs.size(); i++) callArgs[i] = convert(vizArgs.get(i), types[i]);
-        log.println("Input: " + vizArgs.toString());
-        Tracer.delay();
-        Object result = method.invoke(new ${className}(), callArgs);
-        JsonElement resultJson = GSON.toJsonTree(result);
-        if (isNumericArray(resultJson)) resultTracer.set(toObjectArray(resultJson.getAsJsonArray()));
-        log.println("Output: " + GSON.toJson(result));
-        Tracer.delay();
+        Object target = null;
+        if (!Modifier.isStatic(method.getModifiers())) {
+            try {
+                Constructor<?> ctor = entryClass.getDeclaredConstructor();
+                ctor.setAccessible(true);
+                target = ctor.newInstance();
+            } catch (Exception e) {
+                log.println("Cannot create a " + entryClass.getSimpleName() + " (it needs an accessible no-arg constructor): " + e);
+                Tracer.delay();
+                return;
+            }
+        }
+        try {
+            Class<?>[] types = method.getParameterTypes();
+            Object[] callArgs = new Object[vizArgs.size()];
+            for (int i = 0; i < vizArgs.size(); i++) callArgs[i] = convert(vizArgs.get(i), types[i]);
+            log.println("Input: " + vizArgs.toString());
+            Tracer.delay();
+            Object result = method.invoke(target, callArgs);
+            JsonElement resultJson = GSON.toJsonTree(result);
+            if (isNumericArray(resultJson)) resultTracer.set(toObjectArray(resultJson.getAsJsonArray()));
+            log.println("Output: " + GSON.toJson(result));
+            Tracer.delay();
+        } catch (Exception e) {
+            Throwable cause = (e instanceof InvocationTargetException && e.getCause() != null) ? e.getCause() : e;
+            log.println("Case failed: " + cause.getClass().getSimpleName() + ": " + String.valueOf(cause.getMessage()));
+            Tracer.delay();
+        }
     }
 }
 `;
+
+function javaHarness(code, entry, args, className) {
+  const mask = javaCodeMask(code);
+  const entryClass = resolveJavaEntryClass(code, mask, className);
+  if (!firstCodeMatch(code, mask, new RegExp(`\\bclass\\s+${escapeRegExp(entryClass)}\\b`, 'g'))) {
+    throw new Error(`Visualizing a case needs a class ${entryClass} in the Java file (the harness adds a Main that calls its entry method).`);
+  }
+  const runCall = `VizHarness.run(${entryClass}.class, "${entry}", ${argsLiteral(args)});`;
+  const withImports = ensureJavaImports(code, mask);
+  const demoted = demotePublicClass(withImports, javaCodeMask(withImports));
+  const demotedMask = javaCodeMask(demoted);
+  if (firstCodeMatch(demoted, demotedMask, /\bclass\s+Main\b/g)) {
+    // The file already defines Main: its main() is the demo driver,
+    // not the selected case. Run the case from it instead - replace
+    // the demo main's body with the harness call (or add a main
+    // when the class has none) - and append the shared harness.
+    // The pad itself is never modified: this is the generated copy.
+    const replaced = replaceMainBody(demoted, demotedMask, runCall);
+    if (replaced) return `${replaced}\n${JAVA_VIZ_HARNESS}`;
+    const added = addMainMethod(demoted, demotedMask, runCall);
+    if (added) return `${added}\n${JAVA_VIZ_HARNESS}`;
+    throw new Error('This Java file defines a Main class, but the harness could not find its main() method - add a public static void main(String[] args) method to Main, or move the entry method to a Solution class.');
+  }
+  // No Main yet: append the harness and a Main that calls it.
+  return `${demoted}\n${JAVA_VIZ_HARNESS}\n\n// ---- visualize this test case (auto-generated) ----\npublic class Main {\n    public static void main(String[] argv) {\n        ${runCall}\n    }\n}\n`;
 }
 
 export function buildCaseVisualization(ext, code, entry, args) {
@@ -268,6 +472,10 @@ export function buildCaseVisualization(ext, code, entry, args) {
   }
   if (ext === 'py') return pythonHarness(code, parsed.method, args);
   if (ext === 'js') return jsHarness(code, parsed.method, args);
-  if (ext === 'java') return javaHarness(code, parsed.method, args, parsed.className || 'Solution');
+  // A bare entry passes className null: the Java harness resolves
+  // the entry class itself (entry's class part, else Solution if
+  // declared, else the file's public class, else Solution), the
+  // same resolution the test runner uses.
+  if (ext === 'java') return javaHarness(code, parsed.method, args, parsed.className);
   throw new Error(`Visualizing a case is not supported for .${ext} files yet (Python, JavaScript and Java are).`);
 }

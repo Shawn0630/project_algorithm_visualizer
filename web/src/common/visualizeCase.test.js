@@ -59,21 +59,105 @@ if __name__ == "__main__":
 });
 
 describe('buildCaseVisualization - java', () => {
+  // An AI-written pad: the algorithm lives on Main as a static
+  // method, Main's constructor runs a demo, and main() is the demo
+  // driver. Its main() body carries braces inside a string and a
+  // comment, so a naive brace match would replace the wrong span.
+  const MAIN_STATIC_PAD = `import java.util.*;
+import org.algorithm_visualizer.*;
+
+public class Main {
+    private Array1DTracer tracer = new Array1DTracer("values");
+
+    public Main() {
+        // demo constructor: must NOT run for a visualized case
+        System.out.println("demo constructor ran");
+    }
+
+    public static List<List<String>> solveSecretSanta(String data) {
+        return new ArrayList<>();
+    }
+
+    public static void main(String[] args) {
+        // demo driver: must NOT run for a visualized case
+        System.out.println("demo main ran { with braces }");
+        // a comment with a brace }
+        new Main();
+    }
+}
+`;
+
+  const MAIN_INSTANCE_PAD = `import java.util.*;
+
+public class Main {
+    public List<String> twice(String s) {
+        List<String> out = new ArrayList<>();
+        out.add(s);
+        out.add(s);
+        return out;
+    }
+
+    public static void main(String[] args) {
+        System.out.println("demo");
+    }
+}
+`;
+
+  const MAIN_AND_SOLUTION_PAD = `import java.util.*;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("demo");
+    }
+}
+
+class Solution {
+    public int twice(int n) {
+        return n * 2;
+    }
+}
+`;
+
+  const MAIN_NO_MAIN_PAD = `import java.util.*;
+
+public class Main {
+    public static List<String> twice(String s) {
+        return new ArrayList<>();
+    }
+}
+`;
+
+  const MAIN_ARGS_ARRAY_PAD = `import java.util.*;
+
+public class Main {
+    public static int twice(int n) {
+        return n * 2;
+    }
+
+    public static void main(String args[]) throws Exception {
+        System.out.println("demo");
+    }
+}
+`;
+
   it('demotes a public entry class to package-private so the harness compiles as Main.java', () => {
     const out = buildCaseVisualization('java', PUBLIC_SOLUTION, 'Solution.findFraudulentUsers', [[['u1', 1]], 1, 10]);
     expect(out).not.toMatch(/\bpublic\s+class\s+Solution\b/);
     expect(out).toMatch(/\bclass\s+Solution\b/);
     expect(out).toMatch(/\bpublic\s+class\s+Main\b/);
-    // The generated Main still reaches the entry class by reflection
-    // and by instantiation in the same file.
-    expect(out).toContain('Solution.class.getDeclaredMethods()');
-    expect(out).toContain('new Solution()');
+    // The generated Main calls the shared harness with the entry
+    // class, which reaches it by reflection and instantiates it
+    // only for instance methods.
+    expect(out).toContain('VizHarness.run(Solution.class, "findFraudulentUsers"');
+    expect(out).toContain('class VizHarness');
+    expect(out).toContain('getDeclaredConstructor()');
   });
 
   it('demotes a public entry class for a bare method entry too', () => {
     const out = buildCaseVisualization('java', PUBLIC_SOLUTION, 'findFraudulentUsers', [[['u1', 1]], 1, 10]);
     expect(out).not.toMatch(/\bpublic\s+class\s+Solution\b/);
     expect(out).toMatch(/\bclass\s+Solution\b/);
+    expect(out).toContain('VizHarness.run(Solution.class, "findFraudulentUsers"');
   });
 
   it('leaves a package-private entry class unchanged', () => {
@@ -102,10 +186,78 @@ describe('buildCaseVisualization - java', () => {
     expect(abstractOut).toMatch(/\babstract\s+class\s+Solution\b/);
   });
 
-  it('still rejects a file that already defines a Main class', () => {
-    expect(() =>
-      buildCaseVisualization('java', `${PUBLIC_SOLUTION}\npublic class Main {}`, 'Solution.findFraudulentUsers', [[], 1, 10])
-    ).toThrow(/already defines a Main/);
+  it('visualizes a Main file with a static entry instead of rejecting it', () => {
+    const out = buildCaseVisualization('java', MAIN_STATIC_PAD, 'solveSecretSanta', ['Alice,Bob']);
+    expect(out).toContain('VizHarness.run(Main.class, "solveSecretSanta"');
+    expect(out).toContain('class VizHarness');
+    // The demo main() body is gone, but the rest of Main is untouched.
+    expect(out).not.toContain('demo main ran');
+    expect(out).not.toContain('new Main()');
+    expect(out).toContain('demo constructor ran');
+    // Still exactly one public Main: no second Main class was appended.
+    expect(out.match(/\bpublic\s+class\s+Main\b/g)).toHaveLength(1);
+    // The harness was given the imports the file was missing, without
+    // duplicating the ones it already had.
+    expect(out.match(/import org\.algorithm_visualizer\.\*;/g)).toHaveLength(1);
+    expect(out.match(/import java\.util\.\*;/g)).toHaveLength(1);
+    expect(out).toContain('import com.google.gson.*;');
+    expect(out).toContain('import java.lang.reflect.*;');
+    // A static entry is invoked with a null target (no constructor run).
+    expect(out).toContain('Object target = null;');
+    expect(out).toContain('if (!Modifier.isStatic(method.getModifiers()))');
+    expect(out).toContain('method.invoke(target, callArgs)');
+  });
+
+  it('accepts a class-qualified entry on a Main file', () => {
+    const out = buildCaseVisualization('java', MAIN_STATIC_PAD, 'Main.solveSecretSanta', ['Alice,Bob']);
+    expect(out).toContain('VizHarness.run(Main.class, "solveSecretSanta"');
+    expect(out).not.toContain('demo main ran');
+  });
+
+  it('visualizes a Main file with an instance entry, instantiating it', () => {
+    const out = buildCaseVisualization('java', MAIN_INSTANCE_PAD, 'twice', ['x']);
+    expect(out).toContain('VizHarness.run(Main.class, "twice"');
+    expect(out).not.toContain('demo');
+    expect(out.match(/\bpublic\s+class\s+Main\b/g)).toHaveLength(1);
+    // An instance entry is instantiated through the no-arg constructor.
+    expect(out).toContain('getDeclaredConstructor()');
+  });
+
+  it('resolves a bare entry to Solution when a Main file also declares one', () => {
+    const out = buildCaseVisualization('java', MAIN_AND_SOLUTION_PAD, 'twice', [21]);
+    expect(out).toContain('VizHarness.run(Solution.class, "twice"');
+    expect(out).not.toContain('demo');
+    expect(out).toMatch(/\bpublic\s+class\s+Main\b/);
+    expect(out).toMatch(/\bclass\s+Solution\b/);
+    expect(out).not.toMatch(/\bpublic\s+class\s+Solution\b/);
+  });
+
+  it('adds a main() to a Main class that has none', () => {
+    const out = buildCaseVisualization('java', MAIN_NO_MAIN_PAD, 'twice', ['x']);
+    expect(out).toContain('VizHarness.run(Main.class, "twice"');
+    expect(out).toContain('public static void main(String[] argv) {');
+    expect(out.match(/\bpublic\s+class\s+Main\b/g)).toHaveLength(1);
+  });
+
+  it('replaces a main() written as String args[] with a throws clause', () => {
+    const out = buildCaseVisualization('java', MAIN_ARGS_ARRAY_PAD, 'twice', [21]);
+    expect(out).toContain('VizHarness.run(Main.class, "twice"');
+    expect(out).not.toContain('demo');
+    // The declaration (including its throws clause) is untouched.
+    expect(out).toContain('public static void main(String args[]) throws Exception {');
+  });
+
+  it('resolves a bare entry to the file public class when there is no Solution', () => {
+    const out = buildCaseVisualization(
+      'java',
+      'public class Foo {\n    public static int twice(int n) {\n        return n * 2;\n    }\n}\n',
+      'twice',
+      [21]
+    );
+    expect(out).toContain('VizHarness.run(Foo.class, "twice"');
+    expect(out).toMatch(/\bclass\s+Foo\b/);
+    expect(out).not.toMatch(/\bpublic\s+class\s+Foo\b/);
+    expect(out).toMatch(/\bpublic\s+class\s+Main\b/);
   });
 
   it('still rejects a file without the entry class', () => {
